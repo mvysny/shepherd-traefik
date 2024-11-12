@@ -17,3 +17,5 @@ How this works:
 
 Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
 and makes the system much more complicated than it needs to be.
+
+TODO work in progress
