@@ -5,7 +5,7 @@ Builds given git repos periodically and automatically deploys them to a Linux bo
 Serves as a homebrew "replacement" for Heroku, to publish your own pet projects.
 Built with off-the-shelf tools: Kubernetes and Jenkins.
 
-See the [previous Vaadin Shepherd](https://github.com/mavi/shepherd).
+See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd).
 
 How this works:
 
