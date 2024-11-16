@@ -10,12 +10,20 @@ See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd).
 How this works:
 
 * Jenkins monitors projects and rebuilds them as Docker images automatically upon change
+  * Installed as a deb, running natively in linux outside of docker.
+  * Listens as http on port TODO on `docker0` and `localhost` interfaces; Traefik will unwrap https for us.
+* Shepherd Web Admin, listening as http on port TODO on the `docker0` interface; Traefik will unwrap https for us.
 * Docker service [keeps the docker containers up-and-running](https://mvysny.github.io/vaadin-docker-service/)
-* Apps are published at http://projectid.v-herd2.eu
+* Apps are published at `https://projectid.v-herd2.eu`
 * Traefik [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
+  * Tunnels `https://jenkins.admin.v-herd2.eu` to Jenkins: https://stackoverflow.com/a/43541732/377320
+  * Tunnels `https://web.admin.v-herd2.eu` to Shepherd Admin
 * A wildcard DNS is obtained for `*.v-herd2.eu` automatically by Traefik.
 * [shepherd-java](https://github.com/mvysny/shepherd-java-client) should be modified to be able to control
   both the old shepherd and also the new one.
+* Every project has a docker-compose yaml file named `projectid.yaml` in `/etc/shepherd/docker-compose/` folder
+  * The main web service exposes port 8080 and is attached to a web network
+  * If there's Postgres Service, a private network is generated as well, so that Vaadin sees Postgres
 
 Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
 and makes the system much more complicated than it needs to be.
