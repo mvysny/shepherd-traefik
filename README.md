@@ -13,6 +13,8 @@ How this works:
   * Installed as a deb, running natively in linux outside of docker.
     * Or alternatively running within docker itself! [docker-in-docker](https://mvysny.github.io/docker-in-docker/)
   * Listens as http on port TODO on `docker0` and `localhost` interfaces; Traefik will unwrap https for us.
+  * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...
+    * This could be solved via a bash script perhaps?
 * Shepherd Web Admin, listening as http on port TODO on the `docker0` interface; Traefik will unwrap https for us.
   * Or alternatively running within docker itself! [docker-in-docker](https://mvysny.github.io/docker-in-docker/)
 * Docker service [keeps the docker containers up-and-running](https://mvysny.github.io/vaadin-docker-service/)
