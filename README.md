@@ -141,4 +141,122 @@ The Jenkins build script is as follows: TODO
 
 # Shepherd Internals
 
-TODO
+Minimum requirements:
+
+* A VM with 8-16 GB of RAM; both x86-64 and arm64 works. Ideally with a public ipv4 address.
+* Fairly new Linux distribution, ideally Debian-based. Perfect is Ubuntu latest LTS, at least 24.04, so that
+  all necessary apps are available in apt repository.
+  * Docker 24 or higher, in order to be able to use docker build caches.
+* A DNS domain, with the ipv4 "A" DNS record pointing to your VM.
+
+## Installation
+
+ssh into the machine as root & update all packages & reboot.
+
+### Docker
+
+Install docker (make sure Docker is version 24 or higher):
+
+```bash
+$ sudo apt install docker.io docker-buildx docker-compose
+$ usermod -aG docker 1000 # so that Jenkins has access to docker
+$ reboot
+```
+Create a private docker network for administrative tools (Jenkins and Shepherd-Java):
+```bash
+$ docker network create admin.int
+```
+
+We'll use a lot of networks with docker - one network per project. The default limit of docker networks is 29
+which means we can create and host 28 projects tops (minus 1 network allocated for admin stuff).
+To be able to create more networks, edit `/etc/docker/daemon.json` and add:
+```json
+{
+   "default-address-pools": [
+        {
+            "base":"172.17.0.0/12",
+            "size":16
+        },
+        {
+            "base":"192.168.0.0/16",
+            "size":20
+        },
+        {
+            "base":"10.99.0.0/16",
+            "size":24
+        }
+    ]
+}
+```
+Restart docker daemon:
+```bash
+$ systemctl restart docker.service
+```
+
+#### Docker Build Cache
+
+We need docker-buildx to enable docker build cache (see [Docker buildx mount cache](https://mvysny.github.io/docker-build-cache/) for more details).
+To take advantage of build caches, the project must contain this in their `Dockerfile`s:
+```
+RUN --mount=type=cache,target=/root/.gradle --mount=type=cache,target=/root/.vaadin ./gradlew clean build -Pvaadin.productionMode --no-daemon --info --stacktrace
+```
+Note the `--mount-type` arg.
+
+We need separate build caches per project, otherwise we can't build projects in parallel since
+they would overwrite their caches. See [#3](https://github.com/mvysny/shepherd/issues/3) for more details.
+
+```bash
+sudo mkdir -p /var/cache/shepherd/docker
+sudo chgrp docker /var/cache/shepherd/docker
+sudo chmod g+w /var/cache/shepherd/docker
+```
+Edit `/etc/docker/daemon.json` and enable containerd-snapshotter:
+```json
+{
+  "features": {
+    "containerd-snapshotter": true
+  }
+}
+```
+Restart docker daemon:
+```bash
+$ systemctl restart docker.service
+```
+Verify that the setting took effect:
+```bash
+$ docker info|grep driver-type
+driver-type: io.containerd.snapshotter.v1
+```
+
+### Prepare The Filesystem
+
+Create the necessary files on the filesystem:
+```bash
+$ sudo mkdir -p /var/opt/shepherd/jenkins_home
+$ sudo chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
+```
+Clone this project on the target machine:
+```bash
+$ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
+```
+Edit the `docker-compose.yaml` and replace `mydomain.me` with the DNS domain you own, and
+you allocated for this project.
+
+> Note: if you're just trying out Shepherd-Traefik then you should enable all lines labeled
+> "debug" - it will disable https (simplifying the setup) and enable Traefik Web UI interface.
+
+Now you're ready to start Shepherd:
+```bash
+$ docker-compose up
+```
+### https
+
+TODO configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
+[2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
+
+### Jenkins
+
+Go to `https://jenkins.admin.mydomain.me` and configure Jenkins:
+* Disable all plugins except "Build Timeout", "Timestamper", "Git" and "Matrix Authorization Strategy". TODO exact plugin list.
+* Create the `admin` user, with a good strong password.
+* Go to *Manage Jenkins / System* and set `# of executors`: 2

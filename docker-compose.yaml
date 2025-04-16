@@ -1,0 +1,53 @@
+# Runs Shepherd.
+#
+# Read https://github.com/mvysny/shepherd-traefik for more details.
+#
+# Prerequisites:
+# 1. Installed docker
+# 2. Created folder `/var/opt/shepherd`
+# 3. Created private network: `docker network create admin.int`
+
+version: '3'
+
+networks:
+  admin.int:
+    # A network private to the Shepherd administrative tools: Jenkins and Shepherd-java.
+    # No hosted app has access to this network.
+    # Don't forget to create this network via `docker network create admin.int`
+    external: true
+
+services:
+  traefik:
+    # Reverse-proxy Entry-point for all apps.
+    # See https://mvysny.github.io/2-vaadin-apps-1-traefik/
+    # The official v3 Traefik docker image
+    image: traefik:v3.3.5
+    # Tells Traefik to listen to docker
+    # Debug: to enable Traefik web api, add --api.insecure=true
+    command: --providers.docker
+    networks:
+      - admin.int
+    ports:
+      # The HTTP port
+      - "80:80"
+      # Debug: The Web UI (enabled by --api.insecure=true)
+      #- "8080:8080"
+    restart: always
+    volumes:
+      # So that Traefik can listen to the Docker events
+      - /var/run/docker.sock:/var/run/docker.sock
+  jenkins:
+    # See https://github.com/jenkinsci/docker/blob/master/README.md
+    image: jenkins/jenkins:lts-jdk17
+    volumes:
+      - /var/opt/shepherd/jenkins_home:/var/jenkins_home
+      # So that Jenkins jobs can issue docker commands
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - admin.int
+    labels:
+      - "traefik.http.routers.jenkins_admin.entrypoints=http"
+      - "traefik.http.routers.jenkins_admin.rule=Host(`jenkins.admin.mydomain.me`)"
+    restart: always
+    environment:
+      - "JAVA_OPTS=-Djava.awt.headless=true -Xmx512m"
