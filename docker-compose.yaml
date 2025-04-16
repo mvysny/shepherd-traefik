@@ -43,6 +43,8 @@ services:
       - /var/opt/shepherd/jenkins_home:/var/jenkins_home
       # So that Jenkins jobs can issue docker commands
       - /var/run/docker.sock:/var/run/docker.sock
+      # so that Jenkins can run the `docker` binary and build docker images using the docker-buildx extension.
+      # see https://mvysny.github.io/docker-in-docker/
       - /usr/bin/docker:/usr/bin/docker
       - /usr/libexec/docker/cli-plugins/docker-buildx:/usr/libexec/docker/cli-plugins/docker-buildx
     networks:
