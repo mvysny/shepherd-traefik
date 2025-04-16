@@ -256,7 +256,10 @@ Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
 
 ### Jenkins
 
-Go to `https://jenkins.admin.mydomain.me` and configure Jenkins:
-* Disable all plugins except "Build Timeout", "Timestamper", "Git" and "Matrix Authorization Strategy". TODO exact plugin list.
+Go to `https://jenkins.admin.mydomain.me` and configure Jenkins. Enter the generated admin password
+(logged to stdout of your docker-compose), then:
+
+* "Select plugins to install"
+  * Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".
 * Create the `admin` user, with a good strong password.
 * Go to *Manage Jenkins / System* and set `# of executors`: 2
