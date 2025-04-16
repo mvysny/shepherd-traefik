@@ -251,7 +251,7 @@ $ docker-compose up
 ```
 ### https
 
-TODO configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
+Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
 [2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
 
 ### Jenkins
