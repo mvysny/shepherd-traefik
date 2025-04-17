@@ -19,7 +19,7 @@ apt update && apt dist-upgrade
 apt install docker.io docker-buildx docker-compose
 # Jenkins runs in docker as user 1000; let's add the user to the docker group
 # so that Jenkins build scripts has proper access to docker
-usermod -aG docker 1000
+#usermod -aG docker 1000
 # Create a private docker network for administrative tools (Jenkins and Shepherd-Java).
 # Traefik will route jenkins.admin.mydomain.me and admin.mydomain.me here.
 docker network create admin.int
@@ -28,7 +28,7 @@ docker network create admin.int
 # which means we can create and host 28 projects tops (minus 1 network allocated for admin stuff).
 # To be able to create more networks, we'll update docker daemon config.
 # We'll also enable docker-buildx local caches, by enabling the `"containerd-snapshotter": true` feature
-cat <<EOT >> /etc/docker/daemon.json
+cat <<EOT > /etc/docker/daemon.json
 {
    "default-address-pools": [
         {
@@ -65,6 +65,7 @@ mkdir -p /var/opt/shepherd/jenkins_home
 chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 
 # Everything is prepared now.
+echo "\n\n"
 echo "Everything is now prepared. To start Shepherd-Traefik, run"
 echo "$ docker-compose up -d"
 echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
