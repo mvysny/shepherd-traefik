@@ -153,6 +153,9 @@ Minimum requirements:
 
 ssh into the machine as root & update all packages & reboot.
 
+To install Shepherd-Traefik, simply run `sudo ./install` script.
+Alternatively, go through the steps below.
+
 ### Docker
 
 Install docker (make sure Docker is version 24 or higher):

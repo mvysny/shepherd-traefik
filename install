@@ -1,0 +1,72 @@
+#!/bin/bash
+set -e -o pipefail
+
+# This script prepares a Linux box for Shepherd-Traefik.
+#
+# This script is intended to be run on Ubuntu Linux 24.04 or higher;
+# both x86-64 and arm64 are supported.
+#
+# Other linux distros may or may not work. For other distros,
+# Feel free not to run this script, but instead replicate
+# the commands listed here.
+#
+# Run this script as root (with sudo).
+
+# Update the system to the latest version.
+apt update && apt dist-upgrade
+
+# Install docker
+apt install docker.io docker-buildx docker-compose
+# Jenkins runs in docker as user 1000; let's add the user to the docker group
+# so that Jenkins build scripts has proper access to docker
+usermod -aG docker 1000
+# Create a private docker network for administrative tools (Jenkins and Shepherd-Java).
+# Traefik will route jenkins.admin.mydomain.me and admin.mydomain.me here.
+docker network create admin.int
+
+# We'll use a lot of networks with docker - one network per project. The default limit of docker networks is 29
+# which means we can create and host 28 projects tops (minus 1 network allocated for admin stuff).
+# To be able to create more networks, we'll update docker daemon config.
+# We'll also enable docker-buildx local caches, by enabling the `"containerd-snapshotter": true` feature
+cat <<EOT >> /etc/docker/daemon.json
+{
+   "default-address-pools": [
+        {
+            "base":"172.17.0.0/12",
+            "size":16
+        },
+        {
+            "base":"192.168.0.0/16",
+            "size":20
+        },
+        {
+            "base":"10.99.0.0/16",
+            "size":24
+        }
+    ],
+  "features": {
+    "containerd-snapshotter": true
+  }
+}
+EOT
+
+# Restart the docker daemon, in order for the settings to take effect:
+systemctl restart docker.service
+
+# We'll use docker-buildx build caches.
+# We need separate build caches per project, otherwise we can't build projects in parallel since
+# they would overwrite their caches. See https://github.com/mvysny/shepherd/issues/3 for more details.
+mkdir -p /var/cache/shepherd/docker
+chgrp docker /var/cache/shepherd/docker
+chmod g+w /var/cache/shepherd/docker
+
+# Create the necessary files on the filesystem
+mkdir -p /var/opt/shepherd/jenkins_home
+chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
+
+# Everything is prepared now.
+echo "Everything is now prepared. To start Shepherd-Traefik, run"
+echo "$ docker-compose up -d"
+echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
+echo "Further steps:"
+echo "1. Visit https://jenkins.admin.mydomain.me to configure Jenkins"
