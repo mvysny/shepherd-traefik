@@ -64,6 +64,12 @@ chmod g+w /var/cache/shepherd/docker
 mkdir -p /var/opt/shepherd/jenkins_home
 chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 
+# If unchecked, docker build images will consume all disk space.
+# We'll add the following cron weekly job to purge the images:
+
+ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
+
+
 # Everything is prepared now.
 echo "\n\n"
 echo "Everything is now prepared. To start Shepherd-Traefik, run"
@@ -71,3 +77,4 @@ echo "$ docker-compose up -d"
 echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
 echo "Further steps:"
 echo "1. Visit https://jenkins.admin.mydomain.me to configure Jenkins"
+

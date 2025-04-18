@@ -266,3 +266,12 @@ Go to `https://jenkins.admin.mydomain.me` and configure Jenkins. Enter the gener
   * Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".
 * Create the `admin` user, with a good strong password.
 * Go to *Manage Jenkins / System* and set `# of executors`: 2
+
+## After Installation
+
+If unchecked, docker build images will consume all disk space. Add the following cron weekly job to purge the images:
+
+```bash
+$ ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
+```
+
