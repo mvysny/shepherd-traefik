@@ -52,6 +52,8 @@ services:
       - /var/cache/shepherd/docker:/var/cache/shepherd/docker
       # Shepherd-Traefik scripts
       - /opt/shepherd-traefik:/opt/shepherd-traefik
+    group_add:
+      - 125  # docker group id; obtain the correct GID of the `docker` group by running `getent group docker`.
     networks:
       - admin.int
     labels:
