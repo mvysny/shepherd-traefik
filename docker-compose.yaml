@@ -53,8 +53,8 @@ services:
     networks:
       - admin.int
     labels:
-      - "traefik.http.routers.jenkins_admin.entrypoints=http"
-      - "traefik.http.routers.jenkins_admin.rule=Host(`jenkins.admin.mydomain.me`)"
+      - "traefik.http.routers.admin_jenkins.entrypoints=http"
+      - "traefik.http.routers.admin_jenkins.rule=Host(`jenkins.admin.mydomain.me`)"
     restart: always
     environment:
       - "JAVA_OPTS=-Djava.awt.headless=true -Xmx512m"

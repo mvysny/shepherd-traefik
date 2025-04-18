@@ -1,0 +1,79 @@
+#!/bin/bash
+set -e -o pipefail
+
+PROJECT_ID="$1"
+#
+# Builds the project as a Docker image and runs it as a Docker container. Intended
+# to be called from CI (Jenkins) after the project's source git repo has been updated.
+# The CWD must point to the project being built.
+#
+# Accepts parameters:
+# - the project id, e.g. vaadin-boot-example-gradle
+#
+# Accepts the following env variables:
+# - BUILD_MEMORY: (optional) how much memory the build image will get. Defaults to 1024m
+# - CPU_QUOTA: (optional) CPU quota for the build, defaults to 200000 for 2 CPU cores.
+# - BUILD_ARGS: (optional) for example add `export BUILD_ARGS='--build-arg offlinekey="foo"'
+# - DOCKERFILE: (optional) alternative name of the Dockerfile file
+#
+
+if [[ -z "${PROJECT_ID}" ]]; then
+  echo "project_id missing; should be e.g. vaadin-boot-example-gradle"
+  echo
+  echo "Use: $0 project_id"
+  exit 1
+fi
+# the Project ID must:
+#
+# * contain at most 54 characters
+# * contain only lowercase alphanumeric characters or '-'
+# * start with an alphanumeric character
+# * end with an alphanumeric character
+#
+if ! [[ $PROJECT_ID =~ ^[a-z0-9][a-z0-9\-]{0,52}[a-z0-9]$ ]]; then
+  echo "$PROJECT_ID is not a valid project ID"
+  exit 1
+fi
+
+BUILD_MEMORY="${BUILD_MEMORY:-1024m}"
+CPU_QUOTA="${CPU_QUOTA:-200000}"
+IMAGE="shepherd/${PROJECT_ID}"
+DOCKERFILE="${DOCKERFILE:-Dockerfile}"
+
+# 1. build new docker image.
+# optionally, add build args via
+#
+# export BUILD_ARGS='--build-arg offlinekey="foo"'
+#
+# Then, add the following to your `Dockerfile`: `ARG offlinekey`; `ENV VAADIN_OFFLINE_KEY=$offlinekey`
+# Uses 2 CPUs per build to speed things up.
+echo "Building image $IMAGE"
+docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID" \
+  --cache-to "type=local,dest=/var/cache/shepherd/docker/$PROJECT_ID" \
+  -f "$DOCKERFILE" \
+  -t "$IMAGE:latest" \
+  -m "$BUILD_MEMORY" --cpu-period 100000 --cpu-quota "$CPU_QUOTA" \
+  $BUILD_ARGS .
+
+# 2. restart the running docker image
+# TODO limit max memory
+CONTAINER_NAME="shepherd_${PROJECT_ID}"
+CID=$(docker ps -q -f name=^/${CONTAINER_NAME}$)
+echo "Running container: $CID"
+if [[ ! -z "$CID" ]]; then
+  # docker container is running. Stop it.
+  docker container stop -t 5 $CID
+fi
+CID=$(docker ps -aq -f name=^/${CONTAINER_NAME}$)
+echo "Stopped container: $CID"
+if [[ ! -z "$CID" ]]; then
+  # docker container is stoped, but still around. rm it.
+  docker rm -f $CID
+fi
+# The container is no longer around. Start it afresh.
+docker run -d -t --name $CONTAINER_NAME --restart always \
+  --label "traefik.http.routers.shepherd_${PROJECT_ID}.entrypoints=http" \
+  --label "traefik.http.routers.shepherd_${PROJECT_ID}.rule=Host(\`${PROJECT_ID}.mydomain.me\`)" \
+  -p8080:8080  \
+  "$IMAGE:latest"
+
