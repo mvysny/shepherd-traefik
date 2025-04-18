@@ -3,34 +3,33 @@
 Builds given git repos periodically and automatically deploys them to a Linux box running
 [Traefik](https://traefik.io).
 Serves as a homebrew "replacement" for Heroku, to publish your own pet projects.
-Built with off-the-shelf tools: Kubernetes and Traefik.
-
-See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd).
+Built with off-the-shelf tools: Jenkins and Traefik.
 
 How this works:
 
+* You have a DNS domain, e.g. `*.foo.com`, pointing to your machine.
+* The machine runs Traefik which [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
+  * Apps are then published at `myapp23.foo.com`
+  * Traefik also unwraps https to http and uses Let's Encrypt to obtain and update https certificates.
 * Jenkins monitors projects and rebuilds them as Docker images automatically upon change
-  * Installed as a deb, running natively in linux outside of docker.
-    * Or alternatively running within docker itself! [docker-in-docker](https://mvysny.github.io/docker-in-docker/)
-  * Listens as http on port TODO on `docker0` and `localhost` interfaces; Traefik will unwrap https for us.
-  * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...
-    * This could be solved via a bash script perhaps?
-* Shepherd Web Admin, listening as http on port TODO on the `docker0` interface; Traefik will unwrap https for us.
-  * Or alternatively running within docker itself! [docker-in-docker](https://mvysny.github.io/docker-in-docker/)
 * Docker service [keeps the docker containers up-and-running](https://mvysny.github.io/vaadin-docker-service/)
-* Apps are published at `https://projectid.v-herd2.eu`
-* Traefik [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
-  * Tunnels `https://jenkins.admin.v-herd2.eu` to Jenkins: https://stackoverflow.com/a/43541732/377320
-  * Tunnels `https://web.admin.v-herd2.eu` to Shepherd Admin
-* A wildcard DNS is obtained for `*.v-herd2.eu` automatically by Traefik.
-* [shepherd-java](https://github.com/mvysny/shepherd-java-client) should be modified to be able to control
-  both the old shepherd and also the new one.
+* [Shepherd Web Admin](https://github.com/mvysny/shepherd-java-client) allows easy Shepherd administration via a browser.
+
+In more details:
+* Jenkins runs in Docker like all other hosted apps, at `jenkins.admin.foo.com`
+  * Traefik routes to Jenkins like to any other app.
+  * To isolate Jenkins from other apps for security reasons, Jenkins runs on its own private Docker network, `admin.int`
+  * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...
+* Shepherd Web Admin runs in Docker as well, hosted at `admin.foo.com`
+  * Also runs on private Docker network `admin.int`
+* A https certificate for the wildcard DNS is obtained automatically by Traefik: [2 Vaadin apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/)
 * Every project has a docker-compose yaml file named `projectid.yaml` in `/etc/shepherd/docker-compose/` folder
   * The main web service exposes port 8080 and is attached to a web network
   * If there's Postgres Service, a private network is generated as well, so that Vaadin sees Postgres
 
 Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
-and makes the system much more complicated than it needs to be.
+and makes the system much more complicated than it needs to be. See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd)
+if you're interested.
 
 # Adding Your Project To Shepherd
 
