@@ -23,15 +23,15 @@ services:
     # The official v3 Traefik docker image
     image: traefik:v3.3.5
     # Tells Traefik to listen to docker
-    # Debug: to enable Traefik web api, add --api.insecure=true
-    command: --providers.docker
+    # Production: to disable Traefik web api, remove --api.insecure=true
+    command: --providers.docker --api.insecure=true
     networks:
       - admin.int
     ports:
       # The HTTP port
       - "80:80"
-      # Debug: The Web UI (enabled by --api.insecure=true)
-      #- "8080:8080"
+      # Debug: The Web UI (enabled by --api.insecure=true). Remove on production.
+      - "8080:8080"
     restart: always
     volumes:
       # So that Traefik can listen to the Docker events
