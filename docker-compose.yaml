@@ -50,6 +50,8 @@ services:
       - /usr/libexec/docker/cli-plugins/docker-buildx:/usr/libexec/docker/cli-plugins/docker-buildx
       # buildx cache
       - /var/cache/shepherd/docker:/var/cache/shepherd/docker
+      # Shepherd-Traefik scripts
+      - /opt/shepherd-traefik:/opt/shepherd-traefik
     networks:
       - admin.int
     labels:
