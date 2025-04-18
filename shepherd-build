@@ -11,7 +11,7 @@ PROJECT_ID="$1"
 # - the project id, e.g. vaadin-boot-example-gradle
 #
 # Accepts the following env variables:
-# - BUILD_MEMORY: (optional) how much memory the build image will get. Defaults to 1024m
+# - BUILD_MEMORY: (optional) how much memory the build image will get. Defaults to 2048m
 # - CPU_QUOTA: (optional) CPU quota for the build, defaults to 200000 for 2 CPU cores.
 # - BUILD_ARGS: (optional) for example add `export BUILD_ARGS='--build-arg offlinekey="foo"'
 # - DOCKERFILE: (optional) alternative name of the Dockerfile file
@@ -35,10 +35,11 @@ if ! [[ $PROJECT_ID =~ ^[a-z0-9][a-z0-9\-]{0,52}[a-z0-9]$ ]]; then
   exit 1
 fi
 
-BUILD_MEMORY="${BUILD_MEMORY:-1024m}"
+BUILD_MEMORY="${BUILD_MEMORY:-2048m}"
 CPU_QUOTA="${CPU_QUOTA:-200000}"
 IMAGE="shepherd/${PROJECT_ID}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
+RUNTIME_MEMORY="256m"  # TODO parametrize
 
 # 1. build new docker image.
 # optionally, add build args via
@@ -55,8 +56,7 @@ docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID
   -m "$BUILD_MEMORY" --cpu-period 100000 --cpu-quota "$CPU_QUOTA" \
   $BUILD_ARGS .
 
-# 2. restart the running docker image
-# TODO limit max memory
+# 2. restart the docker container
 CONTAINER_NAME="shepherd_${PROJECT_ID}"
 CID=$(docker ps -q -f name=^/${CONTAINER_NAME}$)
 if [[ ! -z "$CID" ]]; then
@@ -73,9 +73,10 @@ fi
 
 echo "Starting $CONTAINER_NAME"
 NETWORK_NAME="${PROJECT_ID}.shepherd"
-# The container is no longer around. Start it afresh.
+# The container is no longer around. Start it afresh. Strictly 1 CPU per container.
 docker run -d -t --name $CONTAINER_NAME --restart always \
-  --network ${NETWORK_NAME}
+  --network ${NETWORK_NAME} \
+  -m ${RUNTIME_MEMORY} --cpus 1 \
   --label "traefik.http.routers.shepherd_${PROJECT_ID}.entrypoints=http" \
   --label "traefik.http.routers.shepherd_${PROJECT_ID}.rule=Host(\`${PROJECT_ID}.mydomain.me\`)" \
   "$IMAGE:latest"
