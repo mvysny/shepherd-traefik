@@ -15,7 +15,11 @@ PROJECT_ID="$1"
 # - CPU_QUOTA: (optional) CPU quota for the build, defaults to 200000 for 2 CPU cores.
 # - BUILD_ARGS: (optional) for example add `export BUILD_ARGS='--build-arg offlinekey="foo"'
 # - DOCKERFILE: (optional) alternative name of the Dockerfile file
+# - RUNTIME_MEMORY: (optional) how much memory the running container will get. Defaults to 256m
 #
+# Prerequisites:
+# - A docker network named PROJECT_ID.shepherd, created and connected to Traefik;
+#   see `docker network create` and `docker network connect` for more info.
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "project_id missing; should be e.g. vaadin-boot-example-gradle"
@@ -39,7 +43,7 @@ BUILD_MEMORY="${BUILD_MEMORY:-2048m}"
 CPU_QUOTA="${CPU_QUOTA:-200000}"
 IMAGE="shepherd/${PROJECT_ID}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
-RUNTIME_MEMORY="256m"  # TODO parametrize
+RUNTIME_MEMORY="${RUNTIME_MEMORY:-256m}"
 
 # 1. build new docker image.
 # optionally, add build args via
