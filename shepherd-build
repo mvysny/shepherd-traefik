@@ -59,21 +59,24 @@ docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID
 # TODO limit max memory
 CONTAINER_NAME="shepherd_${PROJECT_ID}"
 CID=$(docker ps -q -f name=^/${CONTAINER_NAME}$)
-echo "Running container: $CID"
 if [[ ! -z "$CID" ]]; then
   # docker container is running. Stop it.
+  echo "Stopping container with grace period of 5 seconds: $CID"
   docker container stop -t 5 $CID
 fi
 CID=$(docker ps -aq -f name=^/${CONTAINER_NAME}$)
-echo "Stopped container: $CID"
 if [[ ! -z "$CID" ]]; then
   # docker container is stoped, but still around. rm it.
+  echo "Removing stopped container: $CID"
   docker rm -f $CID
 fi
+
+echo "Starting $CONTAINER_NAME"
+NETWORK_NAME="${PROJECT_ID}.shepherd"
 # The container is no longer around. Start it afresh.
 docker run -d -t --name $CONTAINER_NAME --restart always \
+  --network ${NETWORK_NAME}
   --label "traefik.http.routers.shepherd_${PROJECT_ID}.entrypoints=http" \
   --label "traefik.http.routers.shepherd_${PROJECT_ID}.rule=Host(\`${PROJECT_ID}.mydomain.me\`)" \
-  -p8080:8080  \
   "$IMAGE:latest"
 
