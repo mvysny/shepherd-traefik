@@ -31,9 +31,9 @@ In more details:
   * The main web service exposes port 8080 and is attached to a web network
   * If there's Postgres Service, a private network is generated as well, so that Vaadin sees Postgres
 
-Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
-and makes the system much more complicated than it needs to be. See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd)
-if you're interested.
+> Note: Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
+> and makes the system much more complicated than it needs to be. See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd)
+> if you're interested.
 
 # Adding Your Project To Shepherd
 
