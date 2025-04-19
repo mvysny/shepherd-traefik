@@ -20,8 +20,8 @@ services:
   traefik:
     # Reverse-proxy Entry-point for all apps.
     # See https://mvysny.github.io/2-vaadin-apps-1-traefik/
-    # The official v3 Traefik docker image
-    image: traefik:v3.3.5
+    # The official v3.3.5 Traefik docker image
+    image: traefik:latest
     # Tells Traefik to listen to docker
     # Production: to disable Traefik web api, remove --api.insecure=true
     command: --providers.docker --api.insecure=true
@@ -38,7 +38,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
   jenkins:
     # See https://github.com/jenkinsci/docker/blob/master/README.md
-    image: jenkins/jenkins:lts-jdk17
+    image: jenkins/jenkins:lts
     volumes:
       # All Jenkins data - projects, config, plugins - is stored here
       - /var/opt/shepherd/jenkins_home:/var/jenkins_home
