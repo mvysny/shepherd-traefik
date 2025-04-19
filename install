@@ -81,9 +81,8 @@ ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
 
 # Everything is prepared now.
 echo
-echo "Installation is now done."
+echo "Installation is now done. Further steps:"
 echo
-echo "# Further steps"
 echo "1. Jenkins runs as user 'jenkins' and we need to add it to the 'docker' group in order to run docker commands."
 echo "The 'docker' group GROUP_ID is:"
 getent group docker
