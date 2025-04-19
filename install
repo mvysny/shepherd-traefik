@@ -10,16 +10,13 @@ set -e -o pipefail
 # Feel free not to run this script, but instead replicate
 # the commands listed here.
 #
-# Run this script as root (with sudo).
+# Run this script as root.
 
 # Update the system to the latest version.
 apt update && apt dist-upgrade
 
-# Install docker
+# Install docker (make sure Docker is version 24 or higher, to have access to docker build cachces):
 apt install docker.io docker-buildx docker-compose
-# Jenkins runs in docker as user 1000; let's add the user to the docker group
-# so that Jenkins build scripts has proper access to docker
-#usermod -aG docker 1000
 # Create a private docker network for administrative tools (Jenkins and Shepherd-Java).
 # Traefik will route jenkins.admin.mydomain.me and admin.mydomain.me here.
 docker network create admin.int
@@ -52,10 +49,22 @@ EOT
 
 # Restart the docker daemon, in order for the settings to take effect:
 systemctl restart docker.service
+# Verify that the setting took effect: this should print
+# driver-type: io.containerd.snapshotter.v1
+docker info|grep driver-type
 
-# We'll use docker-buildx build caches.
+
+# We'll use docker-buildx build caches for faster project build.
+# See https://mvysny.github.io/docker-build-cache/ for more details.
 # We need separate build caches per project, otherwise we can't build projects in parallel since
 # they would overwrite their caches. See https://github.com/mvysny/shepherd/issues/3 for more details.
+#
+# In order for the projects to take advantage of the cache, the project must contain this in their `Dockerfile`s:
+#
+# RUN --mount=type=cache,target=/root/.gradle --mount=type=cache,target=/root/.vaadin ./gradlew clean build -Pvaadin.productionMode --no-daemon --info --stacktrace
+#
+# Note the `--mount-type` arg.
+
 mkdir -p /var/cache/shepherd/docker
 chgrp docker /var/cache/shepherd/docker
 chmod g+w /var/cache/shepherd/docker
@@ -66,15 +75,31 @@ chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 
 # If unchecked, docker build images will consume all disk space.
 # We'll add the following cron weekly job to purge the images:
-
 ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
 
 
 # Everything is prepared now.
-echo "\n\n"
-echo "Everything is now prepared. To start Shepherd-Traefik, run"
+echo
+echo "Installation is now done."
+echo
+echo "# Further steps"
+echo "1. Jenkins runs as user 'jenkins' and we need to add it to the 'docker' group in order to run docker commands."
+echo "The 'docker' group GROUP_ID is:"
+getent group docker
+echo "Edit 'docker-compose.yaml', the 'group_add' clause, and update the number 125 to the correct group id of the 'docker'"
+echo
+echo "2. If this setup is a toy debug setup:"
+echo "  - Add entries for mydomain.me to /etc/hosts: '127.0.0.1 jenkins.admin.mydomain.me admin.mydomain.me vaadin-boot-example-gradle.mydomain.me'"
+echo "If this is a production setup:"
+echo "  - Edit 'docker-compose.yaml' and replace `mydomain.me` with the DNS domain you own, and you allocated for this project."
+echo "  - Remove the '--api.insecure=true' Traefik switch and prevent Traefik from listening on port 8080"
+echo
+echo "3. To start Shepherd-Traefik, run"
 echo "$ docker-compose up -d"
 echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
-echo "Further steps:"
-echo "1. Visit https://jenkins.admin.mydomain.me to configure Jenkins"
-
+echo
+echo "4. Visit https://jenkins.admin.mydomain.me to configure Jenkins.  Enter the generated admin password (logged to stdout of your docker-compose), then:"
+echo "- Select plugins to install"
+echo '  - Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".'
+echo "  - Create the `admin` user, with a good strong password."
+echo "  - Go to *Manage Jenkins / System* and set '# of executors': 2"

@@ -1,5 +1,7 @@
 # Shepherd (Traefik)
 
+> WORK IN PROGRESS
+
 Builds given git repos periodically and automatically deploys them to a Linux box running
 [Traefik](https://traefik.io).
 Serves as a homebrew "replacement" for Heroku, to publish your own pet projects.
@@ -7,15 +9,17 @@ Built with off-the-shelf tools: Jenkins and Traefik.
 
 How this works:
 
-* You have a DNS domain, e.g. `*.foo.com`, pointing to your machine.
-* The machine runs Traefik which [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
-  * Apps are then published at `myapp23.foo.com`
-  * Traefik also unwraps https to http and uses Let's Encrypt to obtain and update https certificates.
-* Jenkins monitors projects and rebuilds them as Docker images automatically upon change
+* All apps run as docker images.
+* Traefik proxies requests to appropriate docker images.
+* Jenkins rebuilds project Docker images and restarts docker containers automatically.
 * Docker service [keeps the docker containers up-and-running](https://mvysny.github.io/vaadin-docker-service/)
 * [Shepherd Web Admin](https://github.com/mvysny/shepherd-java-client) allows easy Shepherd administration via a browser.
 
 In more details:
+* You have a DNS domain, e.g. `foo.com`, pointing to your machine.
+* The machine runs Traefik which [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
+  * Apps are then published at `myapp23.foo.com`
+  * Traefik also unwraps https to http and uses Let's Encrypt to obtain and update https certificates.
 * Jenkins runs in Docker like all other hosted apps, at `jenkins.admin.foo.com`
   * Traefik routes to Jenkins like to any other app.
   * To isolate Jenkins from other apps for security reasons, Jenkins runs on its own private Docker network, `admin.int`
@@ -152,83 +156,16 @@ Minimum requirements:
 
 ssh into the machine as root & update all packages & reboot.
 
-To install Shepherd-Traefik, simply run `sudo ./install` script.
-Alternatively, go through the steps below.
-
-### Docker
-
-Install docker (make sure Docker is version 24 or higher):
-
+Clone this project on the target machine:
 ```bash
-$ sudo apt install docker.io docker-buildx docker-compose
-$ usermod -aG docker 1000 # so that Jenkins has access to docker
-$ reboot
-```
-Create a private docker network for administrative tools (Jenkins and Shepherd-Java):
-```bash
-$ docker network create admin.int
+$ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
 ```
 
-We'll use a lot of networks with docker - one network per project. The default limit of docker networks is 29
-which means we can create and host 28 projects tops (minus 1 network allocated for admin stuff).
-To be able to create more networks, edit `/etc/docker/daemon.json` and add:
-```json
-{
-   "default-address-pools": [
-        {
-            "base":"172.17.0.0/12",
-            "size":16
-        },
-        {
-            "base":"192.168.0.0/16",
-            "size":20
-        },
-        {
-            "base":"10.99.0.0/16",
-            "size":24
-        }
-    ]
-}
-```
-Restart docker daemon:
-```bash
-$ systemctl restart docker.service
-```
+To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
+to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
+script and run the commands accordingly.
 
-#### Docker Build Cache
-
-We need docker-buildx to enable docker build cache (see [Docker buildx mount cache](https://mvysny.github.io/docker-build-cache/) for more details).
-To take advantage of build caches, the project must contain this in their `Dockerfile`s:
-```
-RUN --mount=type=cache,target=/root/.gradle --mount=type=cache,target=/root/.vaadin ./gradlew clean build -Pvaadin.productionMode --no-daemon --info --stacktrace
-```
-Note the `--mount-type` arg.
-
-We need separate build caches per project, otherwise we can't build projects in parallel since
-they would overwrite their caches. See [#3](https://github.com/mvysny/shepherd/issues/3) for more details.
-
-```bash
-sudo mkdir -p /var/cache/shepherd/docker
-sudo chgrp docker /var/cache/shepherd/docker
-sudo chmod g+w /var/cache/shepherd/docker
-```
-Edit `/etc/docker/daemon.json` and enable containerd-snapshotter:
-```json
-{
-  "features": {
-    "containerd-snapshotter": true
-  }
-}
-```
-Restart docker daemon:
-```bash
-$ systemctl restart docker.service
-```
-Verify that the setting took effect:
-```bash
-$ docker info|grep driver-type
-driver-type: io.containerd.snapshotter.v1
-```
+TODO move to the install script.
 
 ### Prepare The Filesystem
 
@@ -237,13 +174,6 @@ Create the necessary files on the filesystem:
 $ sudo mkdir -p /var/opt/shepherd/jenkins_home
 $ sudo chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 ```
-Clone this project on the target machine:
-```bash
-$ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
-```
-Edit the `docker-compose.yaml` and replace `mydomain.me` with the DNS domain you own, and
-you allocated for this project.
-
 > Note: if you're just trying out Shepherd-Traefik then you should enable all lines labeled
 > "debug" - it will disable https (simplifying the setup) and enable Traefik Web UI interface.
 
@@ -255,22 +185,3 @@ $ docker-compose up
 
 Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
 [2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
-
-### Jenkins
-
-Go to `https://jenkins.admin.mydomain.me` and configure Jenkins. Enter the generated admin password
-(logged to stdout of your docker-compose), then:
-
-* "Select plugins to install"
-  * Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".
-* Create the `admin` user, with a good strong password.
-* Go to *Manage Jenkins / System* and set `# of executors`: 2
-
-## After Installation
-
-If unchecked, docker build images will consume all disk space. Add the following cron weekly job to purge the images:
-
-```bash
-$ ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
-```
-
