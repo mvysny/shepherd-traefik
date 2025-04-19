@@ -69,7 +69,8 @@ mkdir -p /var/cache/shepherd/docker
 chgrp docker /var/cache/shepherd/docker
 chmod g+w /var/cache/shepherd/docker
 
-# Create the necessary files on the filesystem
+# Create a folder where Jenkins will store everything: projects being built, its configuration,
+# its plugins...
 mkdir -p /var/opt/shepherd/jenkins_home
 chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 

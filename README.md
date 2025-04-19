@@ -167,20 +167,6 @@ script and run the commands accordingly.
 
 TODO move to the install script.
 
-### Prepare The Filesystem
-
-Create the necessary files on the filesystem:
-```bash
-$ sudo mkdir -p /var/opt/shepherd/jenkins_home
-$ sudo chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
-```
-> Note: if you're just trying out Shepherd-Traefik then you should enable all lines labeled
-> "debug" - it will disable https (simplifying the setup) and enable Traefik Web UI interface.
-
-Now you're ready to start Shepherd:
-```bash
-$ docker-compose up
-```
 ### https
 
 Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
