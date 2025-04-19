@@ -10,7 +10,7 @@ Built with off-the-shelf tools: Jenkins and Traefik.
 How this works:
 
 * All apps run as docker images.
-* Traefik proxies requests to appropriate docker images.
+* Traefik listens on https 443 (or http 80 in toy mode) and proxies requests to appropriate docker images.
 * Jenkins rebuilds project Docker images and restarts docker containers automatically.
 * Docker service [keeps the docker containers up-and-running](https://mvysny.github.io/vaadin-docker-service/)
 * [Shepherd Web Admin](https://github.com/mvysny/shepherd-java-client) allows easy Shepherd administration via a browser.
