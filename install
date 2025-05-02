@@ -76,7 +76,7 @@ chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 
 # If unchecked, docker build images will consume all disk space.
 # We'll add the following cron weekly job to purge the images:
-ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
+ln -s "$(pwd)/shepherd-clearcache" /etc/cron.weekly/
 
 
 # Prepare shepherd-java configuration file
