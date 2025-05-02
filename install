@@ -123,7 +123,7 @@ echo
 echo "2. If this setup is a toy debug setup:"
 echo "  - Add entries for mydomain.me to /etc/hosts: '127.0.0.1 jenkins.admin.mydomain.me admin.mydomain.me vaadin-boot-example-gradle.mydomain.me'"
 echo "If this is a production setup:"
-echo "  - Edit 'docker-compose.yaml' and replace `mydomain.me` with the DNS domain you own, and you allocated for this project."
+echo '  - Edit "docker-compose.yaml" and replace "mydomain.me" with the DNS domain you own, and you allocated for this project.'
 echo "  - Remove the '--api.insecure=true' Traefik switch and prevent Traefik from listening on port 8080"
 echo
 echo "3. Edit /etc/shepherd/java/config.json and make sure the values are correct."
