@@ -43,7 +43,6 @@ BUILD_MEMORY="${BUILD_MEMORY:-2048m}"
 CPU_QUOTA="${CPU_QUOTA:-200000}"
 IMAGE="shepherd/${PROJECT_ID}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
-RUNTIME_MEMORY="${RUNTIME_MEMORY:-256m}"
 
 # 1. build new docker image.
 # optionally, add build args via
@@ -61,27 +60,5 @@ docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID
   $BUILD_ARGS .
 
 # 2. restart the docker container
-CONTAINER_NAME="shepherd_${PROJECT_ID}"
-CID=$(docker ps -q -f name=^/${CONTAINER_NAME}$)
-if [[ ! -z "$CID" ]]; then
-  # docker container is running. Stop it.
-  echo "Stopping container with grace period of 5 seconds: $CID"
-  docker container stop -t 5 $CID
-fi
-CID=$(docker ps -aq -f name=^/${CONTAINER_NAME}$)
-if [[ ! -z "$CID" ]]; then
-  # docker container is stoped, but still around. rm it.
-  echo "Removing stopped container: $CID"
-  docker rm -f $CID
-fi
-
-echo "Starting $CONTAINER_NAME"
-NETWORK_NAME="${PROJECT_ID}.shepherd"
-# The container is no longer around. Start it afresh. Strictly 1 CPU per container.
-docker run -d -t --name $CONTAINER_NAME --restart always \
-  --network ${NETWORK_NAME} \
-  -m ${RUNTIME_MEMORY} --cpus 1 \
-  --label "traefik.http.routers.shepherd_${PROJECT_ID}.entrypoints=http" \
-  --label "traefik.http.routers.shepherd_${PROJECT_ID}.rule=Host(\`${PROJECT_ID}.mydomain.me\`)" \
-  "$IMAGE:latest"
-
+# We'll use shepherd-cli available in the int_shepherd container to restart the project containers.
+docker exec -ti -w /opt/shepherd-cli/bin int_shepherd ./shepherd-cli restart "$PROJECT_ID"
