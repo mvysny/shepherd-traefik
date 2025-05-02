@@ -22,6 +22,7 @@ services:
     # See https://mvysny.github.io/2-vaadin-apps-1-traefik/
     # The official v3.3.5 Traefik docker image
     image: traefik:latest
+    container_name: int_traefik
     # Tells Traefik to listen to docker
     # Production: to disable Traefik web api, remove --api.insecure=true
     command: --providers.docker --api.insecure=true
@@ -39,6 +40,7 @@ services:
   jenkins:
     # See https://github.com/jenkinsci/docker/blob/master/README.md
     image: jenkins/jenkins:lts
+    container_name: int_jenkins
     volumes:
       # All Jenkins data - projects, config, plugins - is stored here
       - /var/opt/shepherd/jenkins_home:/var/jenkins_home
@@ -62,3 +64,19 @@ services:
     restart: always
     environment:
       - "JAVA_OPTS=-Djava.awt.headless=true -Xmx512m"
+  shepherd:
+    image: mvysny/shepherd-java:latest
+    volumes:
+      # Shepherd config file
+      - /etc/shepherd:/etc/shepherd
+      # So that Shepherd can issue docker commands
+      - /var/run/docker.sock:/var/run/docker.sock
+      # so that Jenkins can run the `docker` binary and build docker images using the docker-buildx extension.
+      # see https://mvysny.github.io/docker-in-docker/
+      - /usr/bin/docker:/usr/bin/docker
+    networks:
+      - admin.int
+    labels:
+      - "traefik.http.routers.admin_jenkins.entrypoints=http"
+      - "traefik.http.routers.admin_jenkins.rule=Host(`shepherd.admin.mydomain.me`)"
+    restart: always
