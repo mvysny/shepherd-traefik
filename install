@@ -49,6 +49,7 @@ cat <<EOT > /etc/docker/daemon.json
 }
 EOT
 
+read -p "Docker daemon will be restarted. Press ENTER to continue."
 # Restart the docker daemon, in order for the settings to take effect:
 systemctl restart docker.service
 # Verify that the setting took effect: this should print
