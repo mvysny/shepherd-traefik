@@ -66,6 +66,7 @@ services:
       - "JAVA_OPTS=-Djava.awt.headless=true -Xmx512m"
   shepherd:
     image: mvysny/shepherd-java:latest
+    container_name: int_shepherd
     volumes:
       # Shepherd config file
       - /etc/shepherd:/etc/shepherd
