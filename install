@@ -79,6 +79,30 @@ chown 1000 /var/opt/shepherd/jenkins_home  # Jenkins runs as user 1000
 ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
 
 
+# Prepare shepherd-java configuration file
+mkdir -p /etc/shepherd/java
+cat <<EOT >/etc/shepherd/java/config.json
+{
+  "memoryQuotaMb": 14102,
+  "concurrentJenkinsBuilders": 2,
+  "maxProjectRuntimeResources": {
+    "memoryMb": 512,
+    "cpu": 1
+  },
+  "maxProjectBuildResources": {
+    "memoryMb": 2500,
+    "cpu": 2
+  },
+  "jenkins": {
+    "url": "http://jenkins:8080",
+    "username": "admin",
+    "password": "admin"
+  },
+  "hostDNS": "mydomain.me",
+  "containerSystem": "traefik-docker"
+}
+EOT
+
 # Everything is prepared now.
 echo
 echo "Installation is now done. Further steps:"
