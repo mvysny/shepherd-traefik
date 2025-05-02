@@ -99,6 +99,7 @@ cat <<EOT >/etc/shepherd/java/config.json
     "password": "admin"
   },
   "hostDNS": "mydomain.me",
+  "shepherdHome": "/opt/shepherd-traefik",
   "containerSystem": "traefik-docker"
 }
 EOT
