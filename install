@@ -19,7 +19,9 @@ apt update && apt dist-upgrade
 apt install docker.io docker-buildx docker-compose
 # Create a private docker network for administrative tools (Jenkins and Shepherd-Java).
 # Traefik will route jenkins.admin.mydomain.me and admin.mydomain.me here.
-docker network create admin.int
+if [[ -z "$(docker network ls --format '{{.Name}}' --filter name=admin.int)" ]]; then
+  docker network create admin.int
+fi
 
 # We'll use a lot of networks with docker - one network per project. The default limit of docker networks is 29
 # which means we can create and host 28 projects tops (minus 1 network allocated for admin stuff).
