@@ -61,4 +61,5 @@ docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID
 
 # 2. restart the docker container
 # We'll use shepherd-cli available in the int_shepherd container to restart the project containers.
-docker exec -ti -w /opt/shepherd-cli/bin int_shepherd ./shepherd-cli restart "$PROJECT_ID"
+echo "Restarting $PROJECT_ID"
+docker exec -w /opt/shepherd-cli/bin int_shepherd ./shepherd-cli restart "$PROJECT_ID"
