@@ -78,6 +78,6 @@ services:
     networks:
       - admin.int
     labels:
-      - "traefik.http.routers.admin_jenkins.entrypoints=http"
-      - "traefik.http.routers.admin_jenkins.rule=Host(`admin.mydomain.me`)"
+      - "traefik.http.routers.admin_shepherd.entrypoints=http"
+      - "traefik.http.routers.admin_shepherd.rule=Host(`admin.mydomain.me`)"
     restart: always
