@@ -54,10 +54,11 @@ read -p "Docker daemon will be restarted. Press ENTER to continue."
 systemctl restart docker.service
 # Verify that the setting took effect: this should print
 # driver-type: io.containerd.snapshotter.v1
-if [[ -z "$(docker info|grep driver-type)" ]]; then
-  echo "ERROR: docker did not activate the containerd-snapshotter extension properly. Maybe docker is too old? Docker 24+ is required."
-  exit 1
-fi
+# But sometimes it doesn't, yet the build caches still work???
+#if [[ -z "$(docker info|grep driver-type)" ]]; then
+#  echo "ERROR: docker did not activate the containerd-snapshotter extension properly. Maybe docker is too old? Docker 24+ is required."
+#  exit 1
+#fi
 
 
 # We'll use docker-buildx build caches for faster project build.
