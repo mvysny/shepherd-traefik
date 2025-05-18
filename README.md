@@ -24,16 +24,45 @@ In more details:
   * Traefik routes to Jenkins like to any other app.
   * To isolate Jenkins from other apps for security reasons, Jenkins runs on its own private Docker network, `admin.int`
   * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...
+  * Jenkins simply runs `/opt/shepherd-traefik/shepherd-build PROJECTID` to rebuild the project and to start the docker container.
 * Shepherd Web Admin runs in Docker as well, hosted at `admin.foo.com`
   * Also runs on private Docker network `admin.int`
 * A https certificate for the wildcard DNS is obtained automatically by Traefik: [2 Vaadin apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/)
-* Every project has a docker-compose yaml file named `projectid.yaml` in `/etc/shepherd/docker-compose/` folder
-  * The main web service exposes port 8080 and is attached to a web network
-  * If there's Postgres Service, a private network is generated as well, so that Vaadin sees Postgres
+* Every project runs in docker container:
+  * The main web service exposes port 8080 and has its own private network, which keeps the apps separated.
+  * The docker container is named `shepherd_PROJECTID`; the docker image is named `shepherd/PROJECTID`; the docker network is named `PROJECTID.shepherd`
+  * TODO Postgres Service
 
 > Note: Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
 > and makes the system much more complicated than it needs to be. See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd)
 > if you're interested.
+
+## Minimum requirements:
+
+* A VM with 8-16 GB of RAM; both x86-64 and arm64 works. Ideally with a public ipv4 address.
+* Fairly new Linux distribution, ideally Debian-based. Perfect is Ubuntu latest LTS, at least 24.04, so that
+  all necessary apps are available in apt repository.
+  * Docker 24 or higher, in order to be able to use docker build caches.
+* A DNS domain, with the ipv4 "A" DNS record pointing to your VM.
+  * Two "A" records are needed, with name "@" and "*" so that wildcard domains will work as well.
+
+# Installation
+
+ssh into the machine as root & update all packages & reboot.
+
+Clone this project on the target machine:
+```bash
+$ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
+```
+
+To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
+to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
+script and run the commands accordingly.
+
+## https
+
+Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
+[2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
 
 # Adding Your Project To Shepherd
 
@@ -110,63 +139,3 @@ See [#16](https://github.com/mvysny/shepherd/issues/16) for more details; exampl
 
 For addons that run via test-scoped Spring Boot, see the `Dockerfile` of the [parttio/parity-theme](https://github.com/parttio/parity-theme) example project.
 
-## docker-compose YAML
-
-Every project will have a docker-compose yaml file named `projectid.yaml` in `/etc/shepherd/docker-compose/` folder, such as:
-```yaml
-networks:
-  web:
-    external: true
-services:
-  vaadin:
-    image: shepherd/karibu-helloworld-application:latest
-    networks:
-      - web
-    ports:
-      - "8080:8080"
-    restart: always
-    labels:
-      - "traefik.http.routers.vaadin-boot-example-gradle.entrypoints=http"
-      - "traefik.http.routers.vaadin-boot-example-gradle.rule=Host(`karibu-helloworld-application.v-herd2.eu`)"
-```
-
-If PostgreSQL service is enabled for the project, add the following to the YAML file: TODO
-
-Now, run `docker-compose up -d -f /etc/shepherd/docker-compose/karibu-helloworld-application.yaml`.
-
-You can further run the following commands to:
-- TODO obtain logs
-- TODO see whether the app is up
-
-## Jenkins build
-
-The Jenkins build script is as follows: TODO
-
-# Shepherd Internals
-
-Minimum requirements:
-
-* A VM with 8-16 GB of RAM; both x86-64 and arm64 works. Ideally with a public ipv4 address.
-* Fairly new Linux distribution, ideally Debian-based. Perfect is Ubuntu latest LTS, at least 24.04, so that
-  all necessary apps are available in apt repository.
-  * Docker 24 or higher, in order to be able to use docker build caches.
-* A DNS domain, with the ipv4 "A" DNS record pointing to your VM.
-  * Two "A" records are needed, with name "@" and "*" so that wildcard domains will work as well.
-
-## Installation
-
-ssh into the machine as root & update all packages & reboot.
-
-Clone this project on the target machine:
-```bash
-$ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
-```
-
-To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
-to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
-script and run the commands accordingly.
-
-### https
-
-Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
-[2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
