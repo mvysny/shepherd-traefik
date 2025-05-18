@@ -151,6 +151,7 @@ Minimum requirements:
   all necessary apps are available in apt repository.
   * Docker 24 or higher, in order to be able to use docker build caches.
 * A DNS domain, with the ipv4 "A" DNS record pointing to your VM.
+  * Two "A" records are needed, with name "@" and "*" so that wildcard domains will work as well.
 
 ## Installation
 
@@ -164,8 +165,6 @@ $ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd
 To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
 to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
 script and run the commands accordingly.
-
-TODO move to the install script.
 
 ### https
 
