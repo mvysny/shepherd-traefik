@@ -1,0 +1,39 @@
+#!/bin/bash
+set -e -o pipefail
+
+# This script removes Shepherd-Traefik from a Linux box.
+#
+# Run this script as root.
+
+# stop and kill all docker containers
+if [[ -n "$(docker ps -a -q)" ]]; then
+  docker stop $(docker ps -a -q)
+  docker rm $(docker ps -a -q)
+fi
+
+# nuke everything docker-related
+docker system prune -a -f
+docker system df
+
+# Remove the custom Docker configuration
+rm -rf /etc/docker/daemon.json
+
+read -p "Docker daemon will be restarted. Press ENTER to continue."
+# Restart the docker daemon, in order for the settings to take effect:
+systemctl restart docker.service
+
+# Remove the shepherd docker cache
+rm -rf /var/cache/shepherd
+
+# Remove the folder where Jenkins will store everything: projects being built, its configuration,
+# its plugins...
+rm -rf /var/opt/shepherd
+
+# If unchecked, docker build images will consume all disk space.
+# We'll add the following cron weekly job to purge the images:
+rm -rf /etc/cron.weekly/shepherd-clearcache
+
+# keep /etc/shepherd configuration.
+
+# done
+echo "Shepherd-Traefik is now uninstalled"
