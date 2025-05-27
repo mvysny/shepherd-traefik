@@ -5,6 +5,8 @@ set -e -o pipefail
 #
 # Run this script as root.
 
+read -p "Warning: this will stop and kill all running Docker containers, including non-Shepherd ones. Press ENTER to proceed."
+
 # stop and kill all docker containers
 if [[ -n "$(docker ps -a -q)" ]]; then
   docker stop $(docker ps -a -q)
