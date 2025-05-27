@@ -25,14 +25,14 @@ services:
     container_name: int_traefik
     # Tells Traefik to listen to docker
     # Production: to disable Traefik web api, remove --api.insecure=true
-    command: --providers.docker --api.insecure=true
+    command: --providers.docker --api.insecure=true --entrypoints.https.address=:443
     networks:
       - admin.int
     ports:
-      # The HTTP port
-      - "80:80"
       # Debug: The Web UI (enabled by --api.insecure=true). Remove on production.
       - "8080:8080"
+      # The 'https' entrypoint
+      - "443:443"
     restart: always
     volumes:
       # So that Traefik can listen to the Docker events
@@ -59,7 +59,8 @@ services:
     networks:
       - admin.int
     labels:
-      - "traefik.http.routers.admin_jenkins.entrypoints=http"
+      - "traefik.http.routers.admin_jenkins.entrypoints=https"
+      - "traefik.http.routers.admin_jenkins.tls=true"
       - "traefik.http.routers.admin_jenkins.rule=Host(`jenkins.admin.mydomain.me`)"
     restart: always
     environment:
@@ -78,6 +79,7 @@ services:
     networks:
       - admin.int
     labels:
-      - "traefik.http.routers.admin_shepherd.entrypoints=http"
+      - "traefik.http.routers.admin_shepherd.entrypoints=https"
+      - "traefik.http.routers.admin_shepherd.tls=true"
       - "traefik.http.routers.admin_shepherd.rule=Host(`admin.mydomain.me`)"
     restart: always
