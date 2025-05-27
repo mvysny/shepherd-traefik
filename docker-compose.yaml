@@ -23,9 +23,18 @@ services:
     # The official v3.3.5 Traefik docker image
     image: traefik:latest
     container_name: int_traefik
-    # Tells Traefik to listen to docker
-    # Production: to disable Traefik web api, remove --api.insecure=true
-    command: --providers.docker --api.insecure=true --entrypoints.https.address=:443
+    command:
+      # Enables the web UI and tells Traefik to listen to docker
+      # Production: to disable Traefik web api, remove --api.insecure=true
+      - --providers.docker
+      - --api.insecure=true
+      # Enables https :443 entrypoint
+      - --entrypoints.https.address=:443
+      # No-op certificate resolver by default; configure Traefik's dnsChallenge for wildcard DNS certificates for your DNS vendor.
+      # Email address used for registration.
+      - --certificatesresolvers.default_shepherd.acme.email=your@email
+      # Certificates storage
+      - --certificatesresolvers.default_shepherd.acme.storage=/tls-certificates/acme.json
     networks:
       - admin.int
     ports:
@@ -37,6 +46,8 @@ services:
     volumes:
       # So that Traefik can listen to the Docker events
       - /var/run/docker.sock:/var/run/docker.sock
+      # Traefik DNS certificate storage
+      - /var/opt/shepherd/tls-certificates:/tls-certificates
   jenkins:
     # See https://github.com/jenkinsci/docker/blob/master/README.md
     image: jenkins/jenkins:lts
