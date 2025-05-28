@@ -18,7 +18,7 @@ apt update && apt dist-upgrade
 # Install docker (make sure Docker is version 24 or higher, to have access to docker build cachces):
 apt install docker.io docker-buildx docker-compose
 # Create a private docker network for administrative tools (Jenkins and Shepherd-Java).
-# Traefik will route jenkins.admin.mydomain.me and admin.mydomain.me here.
+# Traefik will route jenkins-admin.mydomain.me and admin.mydomain.me here.
 if [[ -z "$(docker network ls --format '{{.Name}}' --filter name=admin.int)" ]]; then
   docker network create admin.int
 fi
@@ -121,7 +121,7 @@ getent group docker
 echo "Edit 'docker-compose.yaml', the 'group_add' clause, and update the number 125 to the correct group id of the 'docker'"
 echo
 echo "2. If this setup is a toy debug setup:"
-echo "  - Add entries for mydomain.me to /etc/hosts: '127.0.0.1 jenkins.admin.mydomain.me admin.mydomain.me vaadin-boot-example-gradle.mydomain.me'"
+echo "  - Add entries for mydomain.me to /etc/hosts: '127.0.0.1 jenkins-admin.mydomain.me admin.mydomain.me vaadin-boot-example-gradle.mydomain.me'"
 echo "If this is a production setup:"
 echo '  - Edit "docker-compose.yaml" and replace "mydomain.me" with the DNS domain you own, and you allocated for this project.'
 echo "  - Remove the '--api.insecure=true' Traefik switch and prevent Traefik from listening on port 8080"
@@ -133,7 +133,7 @@ echo "4. To start Shepherd-Traefik, run"
 echo "$ docker-compose up -d"
 echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
 echo
-echo "5. Visit https://jenkins.admin.mydomain.me to configure Jenkins. Enter the generated admin password (logged to stdout of your docker-compose), then:"
+echo "5. Visit https://jenkins-admin.mydomain.me to configure Jenkins. Enter the generated admin password (logged to stdout of your docker-compose), then:"
 echo "- Select plugins to install"
 echo '  - Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".'
 echo '  - Create the "admin" user, with a good strong password.'

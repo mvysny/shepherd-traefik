@@ -20,7 +20,7 @@ In more details:
 * The machine runs Traefik which [proxies requests](https://mvysny.github.io/2-vaadin-apps-1-traefik/) to appropriate docker images.
   * Apps are then published at `myapp23.foo.com`
   * Traefik also unwraps https to http and uses Let's Encrypt to obtain and update https certificates.
-* Jenkins runs in Docker like all other hosted apps, at `jenkins.admin.foo.com`
+* Jenkins runs in Docker like all other hosted apps, at `jenkins-admin.foo.com`
   * Traefik routes to Jenkins like to any other app.
   * To isolate Jenkins from other apps for security reasons, Jenkins runs on its own private Docker network, `admin.int`
   * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...

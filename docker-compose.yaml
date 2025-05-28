@@ -71,13 +71,13 @@ services:
       - admin.int
     labels:
       - "traefik.http.routers.admin_jenkins.entrypoints=https"
-      # You will be able to access Jenkins from your browser, at https://jenkins.admin.mydomain.me
+      # You will be able to access Jenkins from your browser, at https://jenkins-admin.mydomain.me
       # You should periodically monitor Jenkins and upgrade plugins as necessary, but this is
       # not strictly required since Jenkins is an internal component of Shepherd and won't be exposed to other users.
       #
       # Note that Shepherd will talk to the Jenkins container directly, over the "admin.int" Docker network,
       # at http://jenkins:8080 .
-      - "traefik.http.routers.admin_jenkins.rule=Host(`jenkins.admin.mydomain.me`)"
+      - "traefik.http.routers.admin_jenkins.rule=Host(`jenkins-admin.mydomain.me`)"
       - "traefik.http.routers.admin_jenkins.tls=true"
       - "traefik.http.routers.admin_jenkins.tls.certresolver=default_shepherd"
       - "traefik.http.routers.admin_jenkins.tls.domains[0].main=mydomain.me"
