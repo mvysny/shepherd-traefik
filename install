@@ -139,6 +139,9 @@ echo '  - Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", 
 echo '  - Create the "admin" user, with a good strong password.'
 echo "  - Go to *Manage Jenkins / System* and set '# of executors': 2"
 echo
-echo "6. Visit https://admin.mydomain.me to visit the Shepherd-Java Web administrative interface."
+echo "6. Edit /etc/shepherd/java/config.json and update the new Jenkins password. You'll need to restart Shepherd to reload config:"
+echo "- docker restart int_shepherd
+echo
+echo "7. Visit https://admin.mydomain.me to visit the Shepherd-Java Web administrative interface."
 echo '- Login with "mavi@vaadin.com"/"admin" and change the password'
 
