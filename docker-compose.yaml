@@ -30,6 +30,9 @@ services:
       - --api.insecure=true
       # Enables https :443 entrypoint
       - --entrypoints.https.address=:443
+      # Enables http :80 entrypoint. This is because certain services (e.g. Cloudflare) are capable of unwrapping https to http,
+      # and so Shepherd receives pure http traffic. See customdomains+http for more info.
+      - --entrypoints.http.address=:80
       # No-op certificate resolver by default; configure Traefik's dnsChallenge for wildcard DNS certificates for your DNS vendor.
       # Email address used for registration.
       - --certificatesresolvers.default_shepherd.acme.email=your@email
@@ -42,6 +45,8 @@ services:
       - "8080:8080"
       # The 'https' entrypoint
       - "443:443"
+      # The 'http' entrypoint.
+      - "80:80"
     restart: always
     volumes:
       # So that Traefik can listen to the Docker events
