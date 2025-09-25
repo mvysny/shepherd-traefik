@@ -55,6 +55,11 @@ Clone this project on the target machine:
 $ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
 ```
 
+Install docker:
+```bash
+$ sudo apt install docker docker-compose-v2 docker-buildx
+```
+
 To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
 to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
 script and run the commands accordingly.

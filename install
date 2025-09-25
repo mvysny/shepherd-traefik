@@ -130,10 +130,10 @@ echo "3. Edit /etc/shepherd/java/config.json and make sure the values are correc
 echo "  - See https://github.com/mvysny/shepherd-java-client for documentation on the config file contents"
 echo
 echo "4. To start Shepherd-Traefik, run"
-echo "$ docker-compose up -d"
+echo "$ docker compose up -d"
 echo "Docker will be configured to restart the Shepherd-Traefik automatically after reboot, so no further steps are necessary"
 echo
-echo "5. Visit https://jenkins-admin.mydomain.me to configure Jenkins. Enter the generated admin password (logged to stdout of your docker-compose), then:"
+echo "5. Visit https://jenkins-admin.mydomain.me to configure Jenkins. Enter the generated admin password (logged to stdout of your docker compose), then:"
 echo "- Select plugins to install"
 echo '  - Disable "Folders", "Ant", all "Pipeline" plugins, "SSH Build Agents", "Matrix Auth Strategy", "PAM Auth", "LDAP", "Email Extension" and "Dark Theme".'
 echo '  - Create the "admin" user, with a good strong password.'
