@@ -91,7 +91,7 @@ mkdir -p /etc/shepherd/java
 cat <<EOT >/etc/shepherd/java/config.json
 {
   "memoryQuotaMb": 14102,
-  "concurrentJenkinsBuilders": 2,
+  "concurrentJenkinsBuilders": 1,
   "maxProjectRuntimeResources": {
     "memoryMb": 512,
     "cpu": 1
@@ -110,6 +110,8 @@ cat <<EOT >/etc/shepherd/java/config.json
   "containerSystem": "traefik-docker"
 }
 EOT
+# 1 concurrent builder for now: 2 builders seem to introduce strange Gradle
+# lock timeouts even though every project should have its own cache...
 
 # Everything is prepared now.
 echo
