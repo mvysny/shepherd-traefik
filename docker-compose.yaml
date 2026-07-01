@@ -21,7 +21,8 @@ services:
     # Reverse-proxy Entry-point for all apps.
     # See https://mvysny.github.io/2-vaadin-apps-1-traefik/
     # The official Traefik docker image
-    image: traefik:v3.5
+    # Traefik 3.6+ required; otherwise docker client is too old and won't connect to newer docker daemon
+    image: traefik:v3.6
     container_name: int_traefik
     command:
       # Enables the web UI and tells Traefik to listen to docker
