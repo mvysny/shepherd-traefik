@@ -92,6 +92,32 @@ $ /opt/shepherd-traefik/shepherd-traefik-connect-networks
 To avoid the problem in the first place, prefer `docker restart int_traefik` over a compose
 recreate, since a plain restart preserves the existing network attachments.
 
+## Scripts
+
+All scripts live in `/opt/shepherd-traefik` and are plain Bash.
+
+- **`install`** — one-time host setup, run as root on Ubuntu 24.04+. Upgrades the system, installs
+  Docker, creates the `admin.int` network, writes `/etc/docker/daemon.json` (enlarged address pools
+  so many project networks are possible, plus the containerd snapshotter for buildx caches), creates
+  the cache and Jenkins-home directories, installs the weekly cache-purge cron, and scaffolds
+  `/etc/shepherd/java/config.json`. Prints manual follow-up steps at the end.
+- **`shepherd-traefik-connect-networks`** — the repair script described above; reconnects Traefik to
+  every `*.shepherd` network. Safe to run repeatedly.
+- **`shepherd-clearcache`** — deletes dangling Docker images (`docker system prune -f`) and wipes the
+  per-project build caches under `/var/cache/shepherd/docker`. Installed by `install` as a weekly cron
+  (`/etc/cron.weekly/`) so build caches don't fill the disk; can also be run manually.
+- **`uninstall`** — removes Shepherd-Traefik from the box. **Warning:** it stops and removes *all*
+  Docker containers (not just Shepherd's), prunes everything, removes the Docker daemon config and
+  `/var/opt/shepherd`, but keeps `/etc/shepherd` configuration. Run as root.
+
+### Internal scripts
+
+- **`shepherd-build PROJECTID`** — **internal; meant to be called by Jenkins only, not run by the
+  maintainer by hand.** After a project's git repo is updated, Jenkins runs this to `docker build` the
+  image (with a per-project buildx cache, under memory/CPU limits) and then restart the app container
+  via `shepherd-cli` inside `int_shepherd`. Tunable via the `BUILD_MEMORY`, `CPU_QUOTA`, `BUILD_ARGS`,
+  `DOCKERFILE`, and `RUNTIME_MEMORY` environment variables.
+
 # Adding Your Project To Shepherd
 
 > Tip: The [shepherd-java](https://github.com/mvysny/shepherd-java-client) is a far easier way to add your projects.
