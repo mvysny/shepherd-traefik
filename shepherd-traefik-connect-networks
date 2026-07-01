@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# shepherd-traefik-connect-networks
+# =================================
+# Reconnects the Traefik container to every per-app "*.shepherd" Docker network
+# so Traefik can reach the app backends. Safe to run repeatedly (idempotent).
+#
+# WHY THIS IS NEEDED
+# ------------------
+# Each Shepherd app runs on its own private "PROJECTID.shepherd" bridge network.
+# Traefik discovers apps via the Docker socket (the provider), but to actually
+# ROUTE traffic to a container it must SHARE A NETWORK with it. A `docker compose
+# up` / recreate of Traefik brings it back attached only to the networks declared
+# in docker-compose.yaml (admin.int), silently dropping every per-app attachment.
+# Symptom of that state: routers show up in the dashboard, but requests 502.
+# Run this after any Traefik recreate to restore the attachments.
+#
+# USAGE
+# -----
+#   ./shepherd-traefik-connect-networks              # connect + restart if changed
+#   RESTART_TRAEFIK=0 ./shepherd-traefik-connect-networks   # connect, don't restart
+#   TRAEFIK_CONTAINER=int_traefik NETWORK_SUFFIX=.shepherd ./shepherd-traefik-connect-networks
+#
+# ENV OVERRIDES (with defaults)
+#   TRAEFIK_CONTAINER=int_traefik   name/ID of the Traefik container
+#   NETWORK_SUFFIX=.shepherd        suffix identifying per-app networks
+#   RESTART_TRAEFIK=1               1 = restart Traefik if any new network was added
+#                                   (needed so Traefik re-enumerates its own networks)
+
+set -euo pipefail
+
+TRAEFIK_CONTAINER="${TRAEFIK_CONTAINER:-int_traefik}"
+NETWORK_SUFFIX="${NETWORK_SUFFIX:-.shepherd}"
+RESTART_TRAEFIK="${RESTART_TRAEFIK:-1}"
+
+log()  { printf '%s\n' "$*"; }
+err()  { printf '%s\n' "$*" >&2; }
+
+# --- sanity checks --------------------------------------------------------
+command -v docker >/dev/null 2>&1 || { err "ERROR: docker not found in PATH."; exit 1; }
+
+if ! docker inspect "$TRAEFIK_CONTAINER" >/dev/null 2>&1; then
+  err "ERROR: container '$TRAEFIK_CONTAINER' not found."
+  err "       Set TRAEFIK_CONTAINER to the correct name and re-run."
+  exit 1
+fi
+
+# --- gather state ---------------------------------------------------------
+# Networks the Traefik container is currently attached to.
+mapfile -t connected < <(
+  docker inspect "$TRAEFIK_CONTAINER" \
+    --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}'
+)
+
+# All per-app networks (names ending in the suffix).
+mapfile -t app_networks < <(
+  docker network ls --format '{{.Name}}' | while read -r n; do
+    [[ "$n" == *"$NETWORK_SUFFIX" ]] && printf '%s\n' "$n"
+  done | sort
+)
+
+if [[ "${#app_networks[@]}" -eq 0 ]]; then
+  log "No '*${NETWORK_SUFFIX}' networks found. Nothing to do."
+  exit 0
+fi
+
+is_connected() {
+  local target="$1" n
+  for n in "${connected[@]}"; do
+    [[ "$n" == "$target" ]] && return 0
+  done
+  return 1
+}
+
+# --- connect --------------------------------------------------------------
+log "Reconnecting '$TRAEFIK_CONTAINER' to ${#app_networks[@]} '*${NETWORK_SUFFIX}' network(s):"
+changed=0
+failed=0
+for net in "${app_networks[@]}"; do
+  if is_connected "$net"; then
+    log "  = already connected: $net"
+  elif docker network connect "$net" "$TRAEFIK_CONTAINER" 2>/dev/null; then
+    log "  + connected:         $net"
+    changed=1
+  else
+    err "  ! FAILED to connect:  $net"
+    failed=1
+  fi
+done
+
+# --- restart so Traefik re-reads its own network list ---------------------
+# Attaching a network to an already-running container does NOT retroactively
+# update Traefik's view of which networks it can route over. A restart makes it
+# re-enumerate. A plain `docker restart` preserves the attachments we just made
+# (unlike a compose recreate).
+if [[ "$changed" -eq 1 && "$RESTART_TRAEFIK" == "1" ]]; then
+  log "New attachments added -> restarting '$TRAEFIK_CONTAINER' to re-enumerate networks..."
+  docker restart "$TRAEFIK_CONTAINER" >/dev/null
+  log "Restarted."
+elif [[ "$changed" -eq 1 ]]; then
+  log "New attachments added, but RESTART_TRAEFIK=0."
+  log "Restart manually so routing takes effect:  docker restart $TRAEFIK_CONTAINER"
+else
+  log "No changes needed; Traefik was already on all app networks."
+fi
+
+# --- final report ---------------------------------------------------------
+log ""
+log "Traefik is now attached to:"
+docker inspect "$TRAEFIK_CONTAINER" \
+  --format '{{range $k,$v := .NetworkSettings.Networks}}  - {{$k}}{{"\n"}}{{end}}'
+
+[[ "$failed" -eq 1 ]] && { err "One or more networks failed to connect (see above)."; exit 1; }
+exit 0
