@@ -69,6 +69,29 @@ script and run the commands accordingly.
 Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
 [2 Vaadin Apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/).
 
+# Maintenance & Troubleshooting
+
+## App routes 502 after restarting Traefik (missing networks)
+
+Traefik can only *route* to an app container if it *shares that container's network*. Each app
+runs on its own private `PROJECTID.shepherd` network, and Traefik gets attached to those networks
+as apps are deployed.
+
+**These attachments are not persistent.** A `docker compose up` / recreate of Traefik brings it
+back attached only to the networks declared in `docker-compose.yaml` (`admin.int`), silently
+dropping every per-app `*.shepherd` attachment. The symptom: routers still show up in the Traefik
+dashboard, but requests return **502**.
+
+If the networks have gone missing like this, run the repair script to reconnect Traefik to every
+`*.shepherd` network (idempotent — safe to run repeatedly; it restarts Traefik if anything changed):
+
+```bash
+$ /opt/shepherd-traefik/shepherd-traefik-connect-networks
+```
+
+To avoid the problem in the first place, prefer `docker restart int_traefik` over a compose
+recreate, since a plain restart preserves the existing network attachments.
+
 # Adding Your Project To Shepherd
 
 > Tip: The [shepherd-java](https://github.com/mvysny/shepherd-java-client) is a far easier way to add your projects.
