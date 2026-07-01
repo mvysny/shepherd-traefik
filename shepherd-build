@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e -o pipefail
 
+# Meant to be run by Jenkins only, not by the system maintainer.
+
 PROJECT_ID="$1"
 #
 # Builds the project as a Docker image and runs it as a Docker container. Intended
