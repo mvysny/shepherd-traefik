@@ -39,16 +39,31 @@ err()  { printf '%s\n' "$*" >&2; }
 # --- sanity checks --------------------------------------------------------
 command -v docker >/dev/null 2>&1 || { err "ERROR: docker not found in PATH."; exit 1; }
 
-if ! docker inspect "$TRAEFIK_CONTAINER" >/dev/null 2>&1; then
-  err "ERROR: container '$TRAEFIK_CONTAINER' not found."
-  err "       Set TRAEFIK_CONTAINER to the correct name and re-run."
-  exit 1
+# NOTE: `docker inspect NAME` also matches IMAGES, so a bare inspect can silently
+# succeed against the `traefik` image (which has no .NetworkSettings). Constrain
+# the lookup to containers with --type container.
+if ! docker inspect --type container "$TRAEFIK_CONTAINER" >/dev/null 2>&1; then
+  # Given name isn't a container: try to auto-detect a running Traefik container
+  # by image name (matches traefik:latest, traefik:v3.6.1, etc).
+  detected="$(docker ps --format '{{.Names}}\t{{.Image}}' \
+                | awk -F'\t' 'tolower($2) ~ /traefik/ {print $1; exit}')"
+  if [[ -n "$detected" ]]; then
+    err "NOTE: '$TRAEFIK_CONTAINER' is not a container; using detected Traefik container '$detected'."
+    TRAEFIK_CONTAINER="$detected"
+  else
+    err "ERROR: no Traefik container found."
+    err "       Looked for a container named '$TRAEFIK_CONTAINER' and any container"
+    err "       running a 'traefik' image, and found neither. Running containers:"
+    docker ps --format '       {{.Names}}\t{{.Image}}' >&2 || true
+    err "       Set the name explicitly, e.g.:  TRAEFIK_CONTAINER=int_traefik $0"
+    exit 1
+  fi
 fi
 
 # --- gather state ---------------------------------------------------------
 # Networks the Traefik container is currently attached to.
 mapfile -t connected < <(
-  docker inspect "$TRAEFIK_CONTAINER" \
+  docker inspect --type container "$TRAEFIK_CONTAINER" \
     --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}'
 )
 
@@ -107,7 +122,7 @@ fi
 # --- final report ---------------------------------------------------------
 log ""
 log "Traefik is now attached to:"
-docker inspect "$TRAEFIK_CONTAINER" \
+docker inspect --type container "$TRAEFIK_CONTAINER" \
   --format '{{range $k,$v := .NetworkSettings.Networks}}  - {{$k}}{{"\n"}}{{end}}'
 
 [[ "$failed" -eq 1 ]] && { err "One or more networks failed to connect (see above)."; exit 1; }
