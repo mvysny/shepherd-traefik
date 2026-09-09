@@ -90,13 +90,103 @@ re-implementing or dropping:
 - The planned per-project Postgres service (README TODO) — both Coolify and Dokploy already offer
   one-click managed databases, which would be a gain.
 
+## Coolify: minimum footprint and installation
+
+Checked on 2026-09-09 against `coollabsio/coolify@main`.
+
+### Can it be run with fewer moving parts?
+
+**No — four containers, all mandatory:** `coolify` (the Laravel app: nginx + php-fpm, with s6 supervising
+Horizon, the scheduler and the DB migration step), `coolify-db` (`postgres:15-alpine`), `coolify-redis`
+(`redis:7-alpine`) and `coolify-realtime` (Soketi + a terminal server, ports 6001/6002). Every one is a
+`depends_on: {condition: service_healthy}` of the app container.
+
+**Redis cannot be dropped.** It is not merely the configured default:
+
+- `config/queue.php` defaults to `redis`, and the production container runs `php artisan horizon`.
+  **Laravel Horizon only supports Redis queues** — setting `QUEUE_CONNECTION=database` doesn't degrade
+  gracefully, it orphans the queue: deployments get dispatched and nothing drains them.
+- `config/cache.php` defaults to the `redis` store.
+- `app/Jobs/ScheduledJobManager.php` calls the Redis facade *directly*
+  (`Redis::connection('default')->ttl(...)`) for scheduled-job locking. That is a code-level dependency
+  with no config knob behind it.
+- The `HORIZON_ENABLED=false` escape hatch in the s6 run script only parks the worker (a dev convenience);
+  it does not remove Redis from the other two paths.
+
+**SQLite is not a supported deployment.** `config/database.php` defaults to `pgsql`; SQLite appears only
+as the `testing` connection (`:memory:`, driven by `phpunit.xml` off a generated
+`database/schema/testing-schema.sql`). So the schema is *broadly* SQLite-shaped, but that is the test
+harness, not a deployment mode — and Postgres is assumed elsewhere:
+
+- The default session driver is `database`, so sessions land in Postgres too.
+- Four of the ~390 migrations are Postgres-only, guarded by `getDriverName() !== 'pgsql'` (fillfactor and
+  autovacuum tuning; column retypes using `USING …::text`). On SQLite they'd silently no-op.
+- Coolify backs up *its own* database with `pg_dump` of `coolify-db` (`SettingsBackup`,
+  `DatabaseBackupJob`), and ships a dedicated `scripts/upgrade-postgres.sh` for major-version jumps.
+
+**What you actually can trim:** `DB_HOST`/`DB_PORT` and `REDIS_HOST`/`REDIS_PORT`/`REDIS_URL` are read
+from the environment (defaulting to `coolify-db` / `coolify-redis`), so the two bundled containers can be
+pointed at an external Postgres and Redis. That moves the dependency off the box; it does not remove it.
+
+**Footprint:** documented minimum is 2 cores / 2 GB RAM / 30 GB disk; the installer hard-checks disk
+(30 GB total, 20 GB free) and only warns. The Coolify stack itself idles at roughly 1 GB RAM before a
+single app is deployed — against Shepherd-Traefik's Traefik + Jenkins + shepherd-java.
+
+### Installation procedure
+
+One command, as root:
+
+```bash
+curl -fsSL https://cdn.coollabs.io/coolify/install.sh | sudo bash
+```
+
+`scripts/install.sh` then: detects the distro (Debian/RHEL/Arch/Alpine/SLES families), installs
+`curl wget git jq openssl`, installs Docker if missing (requires 24+), writes `/etc/docker/daemon.json`
+(json-file log rotation + `default-address-pools` `10.0.0.0/8` size 24), creates `/data/coolify/{source,ssh,
+applications,databases,backups,services,proxy,sentinel,images}` owned by uid 9999 mode 700, downloads
+`docker-compose.yml`, `docker-compose.prod.yml`, `.env.production`, `upgrade.sh` and `upgrade-postgres.sh`
+from `cdn.coollabs.io`, generates `APP_ID`/`APP_KEY`/`DB_PASSWORD`/`REDIS_PASSWORD`/`PUSHER_*` with
+`openssl`, generates an ed25519 keypair and appends it to root's `authorized_keys`, and brings the stack up.
+Finally it prints `http://<ip>:8000`, where you register the first (root) user.
+
+The manual equivalent is the same seven steps, ending in:
+
+```bash
+docker network create --attachable coolify
+docker compose --env-file /data/coolify/source/.env \
+  -f /data/coolify/source/docker-compose.yml \
+  -f /data/coolify/source/docker-compose.prod.yml \
+  up -d --pull always --remove-orphans --force-recreate
+```
+
+Three things worth knowing before running this on a Shepherd box:
+
+- **It edits `/etc/docker/daemon.json`.** It reuses an already-configured `default-address-pools` rather
+  than overwriting it (unless `DOCKER_POOL_FORCE_OVERRIDE=true`), so it should leave `install`'s enlarged
+  pools alone — but this is the one file both projects claim.
+- **Coolify manages even the local host over SSH**, hence the key it appends to `authorized_keys`.
+- **The installer does not start a reverse proxy.** It only creates `/data/coolify/proxy/dynamic`; the
+  `coolify-proxy` (Traefik) container is started by Coolify itself when you onboard the server in the UI,
+  and Coolify then runs `docker network connect <uuid> coolify-proxy` per resource — the in-product
+  answer to the same network-sharing gotcha that `shepherd-traefik-connect-networks` solves here.
+
 ## Sources
 
 - Repo metadata: GitHub API on 2026-09-09.
 - Coolify: [Wildcard certs](https://coolify.io/docs/knowledge-base/proxy/traefik/wildcard-certs),
   [Sentinel and metrics](https://coolify.io/docs/knowledge-base/server/sentinel),
   [Applications](https://coolify.io/docs/applications/),
-  [Scheduled deploy discussion](https://github.com/coollabsio/coolify/discussions/2772).
+  [Scheduled deploy discussion](https://github.com/coollabsio/coolify/discussions/2772),
+  [Installation docs](https://coolify.io/docs/get-started/installation).
+- Coolify footprint chapter, read from `coollabsio/coolify@main` on 2026-09-09:
+  [`docker-compose.yml`](https://github.com/coollabsio/coolify/blob/main/docker-compose.yml),
+  [`docker-compose.prod.yml`](https://github.com/coollabsio/coolify/blob/main/docker-compose.prod.yml),
+  [`scripts/install.sh`](https://github.com/coollabsio/coolify/blob/main/scripts/install.sh),
+  [`config/database.php`](https://github.com/coollabsio/coolify/blob/main/config/database.php),
+  [`config/queue.php`](https://github.com/coollabsio/coolify/blob/main/config/queue.php),
+  [`config/cache.php`](https://github.com/coollabsio/coolify/blob/main/config/cache.php),
+  [`app/Jobs/ScheduledJobManager.php`](https://github.com/coollabsio/coolify/blob/main/app/Jobs/ScheduledJobManager.php),
+  [`docker/production/etc/s6-overlay`](https://github.com/coollabsio/coolify/tree/main/docker/production/etc/s6-overlay/s6-rc.d).
 - Dokploy: [Features](https://docs.dokploy.com/docs/core/features),
   [Monitoring](https://dokploy.com/features/container-server-monitoring),
   [Auto deploy / API](https://docs.dokploy.com/docs/core/auto-deploy),
