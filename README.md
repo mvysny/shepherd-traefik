@@ -62,19 +62,22 @@ In more details:
 
 ssh into the machine as root & update all packages & reboot.
 
-Clone this project on the target machine:
+Clone this project on the target machine, into `/opt` — the path matters, since it is what
+`docker-compose.yaml` bind-mounts into Jenkins:
 ```bash
 $ cd /opt && git clone https://github.com/mvysny/shepherd-traefik && cd shepherd-traefik
 ```
 
-Install docker:
+Then run the installer from that directory:
 ```bash
-$ sudo apt install docker docker-compose-v2 docker-buildx
+$ sudo ./install
 ```
 
-To install Shepherd-Traefik, simply run `sudo ./install` script. This script is intended
-to be run on Ubuntu 24.04+; if you have something else, see the sources of the `install`
-script and run the commands accordingly.
+It installs Docker itself, so there is nothing to `apt install` beforehand. It is intended for
+Ubuntu 24.04+; on anything else, don't run it — read it and replicate its commands by hand. It
+prompts twice for ENTER, and **ends by printing a numbered list of manual follow-up steps** (the
+`docker` group id for `docker-compose.yaml`, the Jenkins first-run wizard, your DNS domain). Those
+steps are not optional and are not repeated here — work through them from the terminal.
 
 ## https
 
