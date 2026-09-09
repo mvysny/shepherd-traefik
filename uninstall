@@ -1,9 +1,32 @@
 #!/bin/bash
 set -e -o pipefail
 
-# This script removes Shepherd-Traefik from a Linux box.
+# uninstall
+# =========
+# Removes Shepherd-Traefik from a Linux box. Takes no arguments and reads no env
+# variables.
 #
-# Run this script as root.
+# USAGE
+# -----
+#   sudo /opt/shepherd-traefik/uninstall
+#
+# Prompts twice for ENTER: once before killing containers, once before restarting
+# the docker daemon.
+#
+# WARNING: NOT SHEPHERD-SCOPED
+# ----------------------------
+# It stops and removes ALL docker containers on the box and runs
+# `docker system prune -a -f`, not just Shepherd's. Do not run it on a box that
+# hosts anything else.
+#
+# WHAT SURVIVES
+# -------------
+# /etc/shepherd is kept on purpose, so that a reinstall lands on the existing
+# shepherd-java config instead of the scaffolded default. Everything else goes:
+# /etc/docker/daemon.json (so the enlarged address pools and the containerd
+# snapshotter revert), /var/cache/shepherd, /var/opt/shepherd (Jenkins home AND
+# the Traefik TLS certificates - a reinstall re-issues them from Let's Encrypt),
+# and the weekly cache-purge cron symlink.
 
 read -p "Warning: this will stop and kill all running Docker containers, including non-Shepherd ones. Press ENTER to proceed."
 
@@ -31,11 +54,10 @@ rm -rf /var/cache/shepherd
 # its plugins...
 rm -rf /var/opt/shepherd
 
-# If unchecked, docker build images will consume all disk space.
-# We'll add the following cron weekly job to purge the images:
+# Remove the weekly cache-purge cron job installed by `install`.
 rm -rf /etc/cron.weekly/shepherd-clearcache
 
-# keep /etc/shepherd configuration.
+# keep /etc/shepherd configuration - see WHAT SURVIVES above.
 
 # done
 echo "Shepherd-Traefik is now uninstalled"

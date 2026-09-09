@@ -1,10 +1,26 @@
 #!/bin/bash
 set -e -o pipefail
 
-# If unchecked, docker build images will consume all disk space.
-# Register this script as a cron weekly job, to purge the images:
+# shepherd-clearcache
+# ===================
+# Purges dangling docker images and every per-project build cache. Takes no
+# arguments and reads no env variables. Safe to run repeatedly; a build after a
+# purge is simply a cold build.
 #
-# ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
+# USAGE
+# -----
+#   /opt/shepherd-traefik/shepherd-clearcache      # manual purge, as root
+#
+# `install` registers it as a weekly cron job:
+#
+#   ln -s /opt/shepherd-traefik/shepherd-clearcache /etc/cron.weekly/
+#
+# KEEP IT WEEKLY
+# --------------
+# Left unchecked, build images and caches consume all disk space - hence the purge.
+# But the purge cadence IS the cache's effective lifetime: a nightly purge would
+# defeat the caching it exists to protect, so don't move this to cron.daily.
+# See `D_no_shared_cache` in DECISIONS.md.
 
 # delete all dangling images.
 # use `docker system df` to check how much disk space docker uses.

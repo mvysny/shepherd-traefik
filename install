@@ -1,16 +1,29 @@
 #!/bin/bash
 set -e -o pipefail
 
-# This script prepares a Linux box for Shepherd-Traefik.
+# install
+# =======
+# One-time host setup: prepares a Linux box for Shepherd-Traefik. Takes no
+# arguments and reads no env variables. NOT idempotent in one respect: it
+# overwrites /etc/docker/daemon.json and /etc/shepherd/java/config.json.
 #
-# This script is intended to be run on Ubuntu Linux 24.04 or higher;
-# both x86-64 and arm64 are supported.
+# USAGE
+# -----
+#   cd /opt/shepherd-traefik && sudo ./install
 #
-# Other linux distros may or may not work. For other distros,
-# Feel free not to run this script, but instead replicate
-# the commands listed here.
+# The CWD matters: the cron symlink and config.json's "shepherdHome" are both
+# derived from $(pwd), so run it from the checkout, not from elsewhere.
 #
-# Run this script as root.
+# PREREQUISITES
+# -------------
+# - Ubuntu Linux 24.04 or higher, x86-64 or arm64. Other distros may or may not
+#   work; for those, don't run this, replicate the commands below by hand.
+# - Root.
+# - Docker 24+ ends up installed either way (see below) - needed for the
+#   containerd snapshotter that buildx local caches require.
+#
+# Prompts twice for ENTER (both times before restarting the docker daemon), and
+# ends by printing the manual follow-up steps it deliberately does not automate.
 
 # Update the system to the latest version.
 apt update && apt dist-upgrade
@@ -60,16 +73,20 @@ if [[ -z "$(docker info|grep driver-type)" ]]; then
 fi
 
 
-# We'll use docker-buildx build caches for faster project build.
-# See https://mvysny.github.io/docker-build-cache/ for more details.
-# We need separate build caches per project, otherwise we can't build projects in parallel since
-# they would overwrite their caches. See https://github.com/mvysny/shepherd/issues/3 for more details.
+# The per-project docker-buildx layer caches live here; `shepherd-build` points
+# --cache-from/--cache-to at /var/cache/shepherd/docker/$PROJECT_ID.
+# Caches are per project and that separation is mandatory - see `D_no_shared_cache`
+# in DECISIONS.md for why, and https://mvysny.github.io/docker-build-cache/ for the
+# mechanics.
 #
-# In order for the projects to take advantage of the cache, the project must contain this in their `Dockerfile`s:
+# A project can additionally keep its dependency tree out of the layers entirely by
+# putting a BuildKit cache mount in its own `Dockerfile`:
 #
 # RUN --mount=type=cache,target=/root/.gradle --mount=type=cache,target=/root/.vaadin ./gradlew clean build -Pvaadin.productionMode --no-daemon --info --stacktrace
 #
-# Note the `--mount-type` arg.
+# Note the `--mount=type=cache` arg. Caveat: with no `id=`, that mount is shared by
+# every project on this box - it is the "Known gap" in `D_no_shared_cache`, and the
+# reason config.json below pins concurrentJenkinsBuilders to 1.
 
 mkdir -p /var/cache/shepherd/docker
 chgrp docker /var/cache/shepherd/docker
@@ -110,8 +127,9 @@ cat <<EOT >/etc/shepherd/java/config.json
   "containerSystem": "traefik-docker"
 }
 EOT
-# 1 concurrent builder for now: 2 builders seem to introduce strange Gradle
-# lock timeouts even though every project should have its own cache...
+# concurrentJenkinsBuilders is 1 on purpose: two parallel builders introduce Gradle
+# lock timeouts and Maven corruption on the shared dependency cache mounts.
+# Don't raise it - see `D_no_shared_cache` in DECISIONS.md.
 
 # Everything is prepared now.
 echo
@@ -142,7 +160,7 @@ echo '  - Create the "admin" user, with a good strong password.'
 echo "  - Go to *Manage Jenkins / System* and set '# of executors': 2"
 echo
 echo "6. Edit /etc/shepherd/java/config.json and update the new Jenkins password. You'll need to restart Shepherd to reload config:"
-echo "- docker restart int_shepherd
+echo "- docker restart int_shepherd"
 echo
 echo "7. Visit https://admin.mydomain.me to visit the Shepherd-Java Web administrative interface."
 echo '- Login with "mavi@vaadin.com"/"admin" and change the password'

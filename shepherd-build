@@ -1,27 +1,44 @@
 #!/bin/bash
 set -e -o pipefail
 
-# Meant to be run by Jenkins only, not by the system maintainer.
+# shepherd-build
+# ==============
+# Builds one project into the Docker image `shepherd/PROJECT_ID`, then restarts its
+# container. INTERNAL: meant to be run by Jenkins after the project's source git repo
+# has been updated, not by the system maintainer by hand.
+#
+# USAGE
+# -----
+#   shepherd-build PROJECT_ID                    # e.g. shepherd-build vaadin-boot-example-gradle
+#
+# The CWD must be the checkout of the project being built - it is the docker build
+# context. PROJECT_ID must be a DNS label (<=54 chars, lowercase alphanumeric and '-',
+# alphanumeric at both ends); it is validated below.
+#
+# ENV OVERRIDES (with defaults)
+#   BUILD_MEMORY=2048m    memory the *build* container gets (docker build -m)
+#   CPU_QUOTA=200000      CPU quota for the *build*, against a 100000 period; 200000 = 2 cores
+#   DOCKERFILE=Dockerfile alternative Dockerfile name, relative to the CWD
+#   BUILD_ARGS=           extra flags spliced into the build command, word-split on purpose,
+#                         e.g. export BUILD_ARGS='--build-arg offlinekey="foo"'
+#
+# Runtime (as opposed to build) memory and CPU quotas are NOT set here: the container
+# is started by shepherd-java, which takes them from /etc/shepherd/java/config.json.
+#
+# PREREQUISITES
+# -------------
+# - A docker network named PROJECT_ID.shepherd, created and connected to Traefik
+#   (`docker network create` / `docker network connect`; see
+#   shepherd-traefik-connect-networks for why the connection matters).
+# - A running `int_shepherd` container - step 2 execs shepherd-cli inside it.
+# - /var/cache/shepherd/docker writable, and the docker containerd snapshotter
+#   enabled, which `install` does. Without the snapshotter the local cache export fails.
+#
+# The build cache directory is per project and must stay that way; the isolation is
+# enforced by the --cache-to/--cache-from flags below rather than by anything inside
+# the project's Dockerfile. See `D_no_shared_cache` in DECISIONS.md for why.
 
 PROJECT_ID="$1"
-#
-# Builds the project as a Docker image and runs it as a Docker container. Intended
-# to be called from CI (Jenkins) after the project's source git repo has been updated.
-# The CWD must point to the project being built.
-#
-# Accepts parameters:
-# - the project id, e.g. vaadin-boot-example-gradle
-#
-# Accepts the following env variables:
-# - BUILD_MEMORY: (optional) how much memory the build image will get. Defaults to 2048m
-# - CPU_QUOTA: (optional) CPU quota for the build, defaults to 200000 for 2 CPU cores.
-# - BUILD_ARGS: (optional) for example add `export BUILD_ARGS='--build-arg offlinekey="foo"'
-# - DOCKERFILE: (optional) alternative name of the Dockerfile file
-# - RUNTIME_MEMORY: (optional) how much memory the running container will get. Defaults to 256m
-#
-# Prerequisites:
-# - A docker network named PROJECT_ID.shepherd, created and connected to Traefik;
-#   see `docker network create` and `docker network connect` for more info.
 
 if [[ -z "${PROJECT_ID}" ]]; then
   echo "project_id missing; should be e.g. vaadin-boot-example-gradle"
@@ -47,12 +64,10 @@ IMAGE="shepherd/${PROJECT_ID}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 
 # 1. build new docker image.
-# optionally, add build args via
-#
-# export BUILD_ARGS='--build-arg offlinekey="foo"'
-#
-# Then, add the following to your `Dockerfile`: `ARG offlinekey`; `ENV VAADIN_OFFLINE_KEY=$offlinekey`
-# Uses 2 CPUs per build to speed things up.
+# The receiving end of BUILD_ARGS is the project's own `Dockerfile`: for
+# BUILD_ARGS='--build-arg offlinekey="foo"' it needs `ARG offlinekey` plus
+# `ENV VAADIN_OFFLINE_KEY=$offlinekey`.
+# $BUILD_ARGS is deliberately unquoted so it word-splits into separate flags.
 echo "Building image $IMAGE"
 docker build --cache-from "type=local,src=/var/cache/shepherd/docker/$PROJECT_ID" \
   --cache-to "type=local,dest=/var/cache/shepherd/docker/$PROJECT_ID" \
