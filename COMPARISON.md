@@ -50,6 +50,13 @@ relaxed since (each marked inline, so the trail stays readable):
 - `R_https_wildcard` — serve at `https://PROJECTID.<domain>` using **one wildcard Let's Encrypt
   cert via DNS challenge**, so a new app is reachable over https immediately with no per-app ACME
   round-trip.
+- `R_build_logs` — **added 2026-09-09:** get at the build log of the **current or last** build, above
+  all when it failed. Jenkins supplies this for free today (a console log per build), and it is the one
+  thing that has to survive its deletion. Deliberately narrow: no build *history* is wanted, and runtime
+  logs are out of scope because they come straight from `docker logs` (see `R_observe_stats`). The
+  discriminator is **persistence, not presentation** — the rebuild trigger is a cron
+  (`R_periodic_rebuild`), so no terminal is attached to the build, and a log that only streams to its
+  caller is gone by the time anyone asks why last night's build failed. See *Build logs* below.
 - `R_observe_stats` — see per-app CPU/memory usage and logs. **Relaxed 2026-09-09:** a CLI or TUI is
   acceptable; this no longer has to be a web UI (see `R_admin_interface`).
 - `R_admin_interface` — some way to administer apps: create, deploy, restart, inspect. **Relaxed
@@ -97,6 +104,7 @@ Legend: ✅ built in · 🟡 possible but needs manual config or an external cro
 | `R_periodic_rebuild` | ✅ Jenkins poll-SCM schedule | 🟡 push webhooks only; cron an HTTP call to `/deploy?uuid=…` with an API token | 🟡 push webhooks; cron `POST /api/application.deploy`, or a Dokploy **Schedule** (cron task) that calls it — the deploy is *unconditional*, there is no build-if-changed anywhere in the tree | 🟡 `dokku git:sync --build-if-changes APP URL` is exactly a poll — but you cron it yourself, and pick the flag deliberately: plain `git:sync` builds nothing, `--build` always, `--build-if-changes` only on a change | 🟡 push webhooks only; cron a call to the webhook URL |
 | `R_run_docker` | ✅ (via shepherd-java) | ✅ mem/CPU limits in *Advanced* | ✅ mem/CPU limits per app (Docker Swarm services) | ✅ `resource:limit --cpu --memory` | 🟡 Swarm; limits only through raw *Service Update Override* JSON |
 | `R_https_wildcard` | ✅ Traefik, DNS challenge, wildcard | 🟡 Traefik or Caddy; documented recipe to switch the resolver to DNS challenge + wildcard | 🟡 Traefik; default is HTTP-01, community recipes edit `traefik.yml` for a DNS-challenge resolver | 🟡 **three** routes, none fully turnkey — incl. the official Traefik proxy plugin with global `challenge-mode dns`; see *Dokku: routing and wildcard certs* below | 🟡 default HTTP-01 per app; DNS-01 only via *Certbot override*; long-open issues (#1444, #1761) |
+| `R_build_logs` | ✅ Jenkins console log per build, for free | 🟡 persisted, but in the control-plane Postgres (`application_deployment_queues.logs`), and the API withholds it unless the token has `can_read_sensitive`; pruned at 60 days, min 10 | ✅ one file per deployment under `/etc/dokploy/logs/<app>/`, plus `deployment.readLogs` in the API; keeps the last **10** — but the UI viewer has a live tail of "shows nothing" reports (#4305, #2607, #1255) | ✅ core `builds` plugin (in v0.38.27): a file per build **and** journald, captured for `git:sync` too because the whole deploy is `exec &>`-redirected; 20 records/app | ❌ **50 lines in RAM**, cleared at the start of each build, lost on `captain` restart |
 | `R_observe_stats` | ❌ here; shepherd-java Web Admin shows them | ✅ *Sentinel*: per-container CPU/mem history graphs (not for Compose apps) | ✅ built-in per-service CPU/mem/net/disk | 🟡 no monitoring by design (“will never manage monitoring”), but apps are plain containers, so `docker stats` / `docker logs` work directly — CLI-acceptable since the relaxation | 🟡 bundled NetData (server-level; per-container via cgroups charts) |
 | `R_admin_interface` | ✅ Web Admin + `shepherd-cli` | ✅ web + official CLI + REST API | ✅ web + official CLI + OpenAPI | 🟡 official **CLI only** (no HTTP API; reports do emit `--format json`); web is third-party | ✅ web + official CLI + API |
 | `R_single_host` | ✅ | ✅ (multi-server optional over SSH) | ✅ | ✅ | ✅ |
@@ -264,6 +272,50 @@ is just a container, and all four build and run it. Two things do differ:
   `resource:limit --memory`) are the ones where a `-XX:MaxRAMPercentage` Dockerfile stays predictable;
   CapRover only reaches limits through raw *Service Update Override* JSON.
 
+## Build logs: the last failure, not a history
+
+`R_build_logs` asks for one thing — *why did the last build fail?* — and because the trigger is a cron,
+the question is always asked **after** the build's output has nowhere left to go. That makes the
+interesting axis persistence, and it separates the field cleanly. Read from source on 2026-09-09.
+
+| | Persisted where | Retention | Getting the last failed build's log |
+|---|---|---|---|
+| **Shepherd-Traefik** | Jenkins console log, per build | Jenkins' own | free, in the Jenkins UI |
+| **Dokku** | file `/var/lib/dokku/data/builds/<app>/<build-id>.log` **+** journald (`dokku-<build-id>`) | 20 records/app, `builds:set [--global\|<app>] retention N` | `builds:list --status failed --format json` → `builds:output`, over SSH |
+| **Dokploy** | file `/etc/dokploy/logs/<app>/<app>-<timestamp>.log`, path in the `deployments` row | last 10 per service (`removeLastTenDeployments()` deletes the file too) | `deployment.readLogs` (`deploymentId`, `tail`, default 100, max 10 000), or `cat` the file |
+| **Coolify** | JSON column `application_deployment_queues.logs`, one entry per line | `cleanup:database`, daily: >60 days deleted, most recent 10 kept | `GET /api/v1/deployments/{uuid}` — **only** with `can_read_sensitive` |
+| **CapRover** | nowhere — an in-memory ring buffer, one per app | `buildLogSize: 50` lines, `.clear()`ed when a build starts | UI / `appData` while it lasts; admin only |
+
+**Dokku's capture is trigger-independent by construction**, which is the property that actually matters
+when Jenkins is deleted. `dokku_setup_build_capture()` in `plugins/common/functions` opens the log,
+records the build, and then redirects the entire deploy:
+
+```bash
+exec &> >(tee -a "$LOG" >(logger -i -t "dokku-${DOKKU_BUILD_ID}"))
+```
+
+Both streams, whatever the caller. `plugins/git/internal-functions` calls it with source `git:sync`, so
+the cron poll that replaces `R_periodic_rebuild` gets its build log for free — no redirection to own in
+the crontab line. The on-disk file is the durable copy and is read even after journald rotates.
+
+Two sharp edges, both of which trap the *obvious* command rather than an exotic one:
+
+- **Dokku: bare `builds:output APP` does not mean "the last build".** It resolves the build id from the
+  *deploy lock*, so on an idle app it prints `App not currently deploying` rather than the failure you
+  came for. The recipe is two steps, but `builds:list` is sorted newest-first and emits `id` and
+  `log_path`, so it scripts:
+
+  ```bash
+  dokku builds:output myapp "$(dokku builds:list myapp --status failed --format json | jq -r '.[0].id')"
+  ```
+- **Coolify: the logs are `$hidden` on the model.** `DeployController` un-hides them only for a request
+  carrying `can_read_sensitive`, so a token minted for reading deployments returns metadata and no
+  output — a silent, confusing failure for exactly the script that wants it.
+
+So `R_build_logs` costs **nothing** on Dokku and Dokploy, is a token-permission footnote on Coolify, and
+is **not met** by CapRover: 50 lines held in the control plane's memory is neither a build log nor
+recoverable after a restart, and there is no flag to grow it.
+
 ## Admin interfaces, per contender
 
 Since `R_admin_interface` was relaxed to accept web **or** TUI **or** CLI — and since a third-party
@@ -394,7 +446,7 @@ smaller and more inspectable than a `traefik.yml` patch to a product that owns i
 ## Verdict
 
 The three relaxations — Swarm accepted, CLI/TUI accepted for administration, and no backup restore
-required — plus the two added requirements reshuffled this substantially. **Accepting Swarm promoted
+required — plus the added requirements reshuffled this substantially. **Accepting Swarm promoted
 nobody** (Dokploy and CapRover flip to ✅ on `R_no_kubernetes`, but CapRover still fails wildcard certs
 *and* resource limits, so it remains the weakest match). **Accepting a CLI promoted Dokku from
 disqualified to arguably the best fit.** **Dropping the restore requirement then took away Dokku's
@@ -432,6 +484,9 @@ is `R_java_docker` as worded — see *Build caches* and *What each product accep
 - **It can keep Traefik.** The official Traefik proxy plugin is label-driven, exactly like this repo, and
   supports global DNS-01 — so the current Traefik knowledge is an asset rather than a sunk cost, and the
   wildcard gap narrows to "add `tls.domains` labels" (or stay on nginx + `dokku-global-cert`).
+- **It replaces the one thing Jenkins gave for free.** The core `builds` plugin captures every deploy's
+  output to a file plus journald *whatever triggered it* — `git:sync` included — so `R_build_logs`
+  survives Jenkins' deletion with no glue at all, and needs no web UI to read (see *Build logs*).
 - Its remaining gaps are small chapters of the new repo: the wildcard-cert decision (above), a stats view
   (`lazydocker`, zero code), and `ports:set` per app because of `EXPOSE 8080`.
 - Its one real cost is a **web UI**: third-party or nothing. The missing HTTP API is *not* a cost —
@@ -446,7 +501,8 @@ per-app metrics, a total-coverage official CLI, and the container port is just a
 needs no fixing up. Asterisks: Docker Swarm (which also makes container-level TUIs show task IDs instead
 of apps), a proprietary subdirectory in an otherwise Apache-2.0 repo, unbounded build-cache growth
 (#1031), a control plane that idles at ~600 MB–1 GB in a single Next.js process (see the footprint
-chapter), and **v0.30.6 — still pre-1.0**, which matters more than usual when the deliverable is
+chapter), build logs whose *files* are sound but whose UI viewer has a standing crop of "shows nothing"
+reports, and **v0.30.6 — still pre-1.0**, which matters more than usual when the deliverable is
 documentation written against it. Its "system restore" feature, previously a selling point, is now moot.
 
 **Coolify** — checks every box on plain Docker, with the largest community and a real REST API + Go
@@ -454,9 +510,12 @@ CLI. Costs: the most moving parts of the group (4 mandatory containers, ~1 GB id
 is deployed — though Dokploy reaches roughly the same RAM in three, see the footprint chapters),
 periodic rebuild is an external cron, and a
 demonstrated willingness to break the build cache by injecting per-build args (#7040, since fixed) —
-which matters directly to `R_build_cache`. The `APP_KEY` restore footgun no longer counts against it.
+which matters directly to `R_build_cache`; and build logs that live in the control-plane Postgres and are
+withheld from the API unless the token carries `can_read_sensitive`. The `APP_KEY` restore footgun no
+longer counts against it.
 
-**CapRover** — weakest match; wildcard/DNS-01 and resource limits both need hand-written overrides.
+**CapRover** — weakest match, and now the only outright ❌ on a box: wildcard/DNS-01 and resource limits
+both need hand-written overrides, and `R_build_logs` is not met at all (50 lines in RAM, no knob).
 
 ### How to settle it
 
@@ -471,7 +530,9 @@ measures `R_cache_isolation` just as cheaply: build A, then check whether B's bu
 `1.0-SNAPSHOT` jar. On the way there it also forces `R_java_docker` (the `EXPOSE 8080` question),
 `R_https_wildcard` (is the app on https the moment its hostname exists?), `R_periodic_rebuild` (wire the
 poll or the cron for real) and `R_admin_interface` — while revealing how much of the guide is click-path
-versus checked-in file. It also shakes out the Swarm-specific unknowns as a side effect —
+versus checked-in file. Add one cheap step to it: **break the third build on purpose** (a typo in the
+`Dockerfile`) and retrieve the log *from the cron-triggered deploy only* — that is `R_build_logs` tested
+where it bites, with no terminal attached. It also shakes out the Swarm-specific unknowns as a side effect —
 
 - the Swarm **overlay** address pool, which is settable only at `docker swarm init --default-addr-pool`
   time and which Dokploy's installer runs for you without those flags (this repo already hit the >28
@@ -518,6 +579,11 @@ Since the goal is to retire `shepherd*` entirely, the naming contract and `confi
   `ports:set app http:80:8080 https:443:8080` per app, because `EXPOSE 8080` would otherwise publish the
   app on `:8080`.
 - **A stats view**, if the chosen product doesn't ship one: `lazydocker` or `ctop`, zero code.
+- **The how-do-I-see-why-it-failed recipe** (`R_build_logs`) — a short chapter, not a component, since
+  nothing has to be built: the two-step `builds:list --status failed` → `builds:output` command for
+  Dokku (plus a `builds:set retention` if 20 records/app is not wanted), or `deployment.readLogs` /
+  the log file for Dokploy. Worth writing down precisely, because the obvious command is the wrong one
+  on both finalists — see *Build logs*.
 
 Two things a migration would *gain*: the planned per-project Postgres service (README TODO) exists as a
 one-click managed database in Coolify, Dokploy and Dokku alike, and Jenkins disappears entirely.
@@ -797,6 +863,39 @@ Three things worth knowing before running this on a Shepherd box:
   consumed by `buildImageFromDockerFile` in
   [`src/docker/DockerApi.ts`](https://github.com/caprover/caprover/blob/master/src/docker/DockerApi.ts)
   (read on 2026-09-09).
+- Build logs, read on 2026-09-09:
+  [Dokku build tracking](https://dokku.com/docs/advanced-usage/builds/) and
+  [log management / `logs:failed`](https://dokku.com/docs/deployment/logs/) — the latter covering only
+  the *failed deploy container*, not build output; verified against `dokku/dokku@v0.38.27`, the current
+  release, so the `builds` plugin is shipped and not master-only:
+  [`plugins/builds`](https://github.com/dokku/dokku/tree/v0.38.27/plugins/builds)
+  (`subcommands.go` for `builds:output` resolving a bare invocation from the deploy lock, and the
+  `id` / `log_path` JSON fields),
+  [`plugins/common/functions`](https://github.com/dokku/dokku/blob/v0.38.27/plugins/common/functions)
+  (`dokku_setup_build_capture()` and its `exec &> >(tee -a "$LOG" …)`), and
+  `plugins/git/internal-functions` (which calls it with source `git:sync`);
+  [Dokploy `deployment` schema](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/db/schema/deployment.ts)
+  (`logPath`, status enum) and
+  [`services/deployment.ts`](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/services/deployment.ts)
+  (`removeLastTenDeployments()`), `LOGS_PATH` from
+  [`constants/index.ts`](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/constants/index.ts),
+  [Dokploy deployment API — `deployment.readLogs`](https://docs.dokploy.com/docs/api/deployment),
+  UI viewer reports [#4305](https://github.com/Dokploy/dokploy/issues/4305),
+  [#2607](https://github.com/Dokploy/dokploy/issues/2607),
+  [#1255](https://github.com/Dokploy/dokploy/issues/1255);
+  [Coolify `ApplicationDeploymentQueue`](https://github.com/coollabsio/coolify/blob/main/app/Models/ApplicationDeploymentQueue.php)
+  (the `logs` JSON column, `$hidden`, `addLogEntry()`),
+  [`Api/DeployController`](https://github.com/coollabsio/coolify/blob/main/app/Http/Controllers/Api/DeployController.php)
+  (`can_read_sensitive` gating `makeVisible(['logs'])`),
+  [`routes/api.php`](https://github.com/coollabsio/coolify/blob/main/routes/api.php) (the `/deployments`
+  routes; `/applications/{uuid}/logs` is runtime, not build, output) and
+  [`Console/Commands/CleanupDatabase.php`](https://github.com/coollabsio/coolify/blob/main/app/Console/Commands/CleanupDatabase.php)
+  (60-day prune, most recent 10 kept);
+  [CapRover `BuildLog.ts`](https://github.com/caprover/caprover/blob/master/src/user/BuildLog.ts)
+  (in-memory ring buffer, `clear()` per build) with `buildLogSize: 50` from
+  [`CaptainConstants.ts`](https://github.com/caprover/caprover/blob/master/src/utils/CaptainConstants.ts),
+  and [caprover-cli `DeployHelper.ts`](https://github.com/caprover/caprover-cli/blob/master/src/utils/DeployHelper.ts)
+  (build logs unavailable when deploying with an app token).
 - Docker Swarm status: [Swarm mode docs (no deprecation notice)](https://docs.docker.com/engine/swarm/),
   [docker/roadmap #175 "clarify its status"](https://github.com/docker/roadmap/issues/175),
   [Mirantis support-through-2030 commitment, summarised](https://blog.oxyconit.com/docker-swarm-mode-2026-practical-guide/).
