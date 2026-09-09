@@ -97,7 +97,7 @@ Legend: ✅ built in · 🟡 possible but needs manual config or an external cro
 | `R_single_host` | ✅ | ✅ (multi-server optional over SSH) | ✅ | ✅ | ✅ |
 | `R_no_kubernetes` | ✅ plain Docker | ✅ plain Docker | ✅ Docker Swarm — accepted | ✅ plain Docker | ✅ Docker Swarm — accepted |
 | `R_restore_the_box` (relaxed — reinstall is enough) | ✅ one JSON file | ✅ one-command installer; the Postgres dump and its `APP_KEY` footgun only matter if you want the *old* state back | ✅ installer; “system restore” exists if you ever want it | ✅ installer; state is files under `/home/dokku` + git remotes, no database to dump | ✅ installer |
-| Weight / stack | Bash + compose; Jenkins is the heavy part | Laravel/PHP + Postgres + Redis + Soketi (~1 GB idle, 4 containers, all mandatory) | Node/Next.js + Postgres + Redis + Traefik | Bash + Go plugins; nginx by default, with Traefik/Caddy/HAProxy/OpenResty as official alternatives — no control-plane database at all | Node + Docker Swarm + nginx |
+| Weight / stack | Bash + compose; Jenkins is the heavy part | Laravel/PHP + Postgres + Redis + Soketi (~1 GB idle, 4 containers, all mandatory) | Node/Next.js + Postgres + Traefik (3 containers — Redis dropped in v0.29.9); ~600 MB–1 GB idle, nearly all of it the one Next.js process; Swarm on the host — see the footprint chapter | Bash + Go plugins; nginx by default, with Traefik/Caddy/HAProxy/OpenResty as official alternatives — no control-plane database at all | Node + Docker Swarm + nginx |
 
 ## Build caches: the requirement with no off-the-shelf equivalent
 
@@ -367,12 +367,14 @@ config edit, not a redesign), native cron *Schedules* so `R_periodic_rebuild` is
 per-app metrics, a total-coverage official CLI, and the container port is just a field, so `EXPOSE 8080`
 needs no fixing up. Asterisks: Docker Swarm (which also makes container-level TUIs show task IDs instead
 of apps), a proprietary subdirectory in an otherwise Apache-2.0 repo, unbounded build-cache growth
-(#1031), and **v0.30.6 — still pre-1.0**, which matters more than usual when the deliverable is
+(#1031), a control plane that idles at ~600 MB–1 GB in a single Next.js process (see the footprint
+chapter), and **v0.30.6 — still pre-1.0**, which matters more than usual when the deliverable is
 documentation written against it. Its "system restore" feature, previously a selling point, is now moot.
 
 **Coolify** — checks every box on plain Docker, with the largest community and a real REST API + Go
-CLI. Costs: the heaviest stack of the group by a wide margin (4 mandatory containers, ~1 GB idle before
-a single app is deployed — see the footprint chapter), periodic rebuild is an external cron, and a
+CLI. Costs: the most moving parts of the group (4 mandatory containers, ~1 GB idle before a single app
+is deployed — though Dokploy reaches roughly the same RAM in three, see the footprint chapters),
+periodic rebuild is an external cron, and a
 demonstrated willingness to break the build cache by injecting per-build args (#7040, since fixed) —
 which matters directly to `R_build_cache`. The `APP_KEY` restore footgun no longer counts against it.
 
@@ -508,6 +510,95 @@ Three things worth knowing before running this on a Shepherd box:
   and Coolify then runs `docker network connect <uuid> coolify-proxy` per resource — the in-product
   answer to the same network-sharing gotcha that `shepherd-traefik-connect-networks` solves here.
 
+## Dokploy: minimum footprint and installation
+
+Checked on 2026-09-09 against `Dokploy/dokploy@canary` (v0.30.6) and the live `install.sh`.
+
+### Can it be run with fewer moving parts?
+
+**It already is — three containers, and Redis is gone:**
+
+- `dokploy` — swarm service, `--replicas 1`, `node.role == manager`: the Node 24 / Next.js control plane.
+  Publishes :3000 in `mode=host`, binds `/var/run/docker.sock` and `/etc/dokploy`.
+- `dokploy-postgres` — swarm service, `postgres:16`, password from a docker secret, volume
+  `dokploy-postgres`.
+- `dokploy-traefik` — `traefik:v3.6.7`, started as a plain `docker run --restart always` on :80 and :443
+  (tcp **and** udp). The swarm-service variant sits commented out in the installer.
+
+**Redis was removed in v0.29.9**, when the deployment queue moved to an in-memory implementation
+(#4645); the leftover health check that made fresh installs report Redis unhealthy was cleaned up in
+#4930, which also dropped `bullmq`. The `redis` code still in the tree is the *managed Redis service you
+can deploy*, not a control-plane dependency — so any doc or blog listing four containers predates
+v0.29.9.
+
+**Postgres cannot be dropped.** It is the only state store, and the container's command is
+`wait-for-postgres.mjs && migration.mjs && server.mjs` — drizzle migrations at every start. Unlike
+Coolify there is no `DB_HOST` escape hatch in the installer, so moving it off the box means editing the
+service definition by hand.
+
+**One optional fourth container:** enabling per-server monitoring starts a `dokploy/monitoring` swarm
+service (Go + SQLite, ~24 MB image). That is where `R_observe_stats`'s ✅ comes from.
+
+**Footprint:** documented minimum is 2 GB RAM and 30 GB disk (no CPU figure). The disk half is explained
+by the control-plane image: `dokploy/dokploy:latest` is **~800 MB compressed**, because the docker CLI
+28.5.2, Nixpacks 1.41, Railpack 0.15.4, buildpacks `pack` 0.39.1, rclone and git-lfs all ship *inside*
+the control plane.
+
+RAM is the surprise, and it is nearly all one process:
+
+| Container | Reported idle |
+|---|---|
+| `dokploy`, fresh v0.27.1 install | 464 MiB |
+| `dokploy`, same version once configured | 633 MiB |
+| `dokploy` on v0.28.8 | 800–850 MiB |
+| `dokploy-postgres` | ~30–60 MB |
+| `dokploy-traefik` | ~50 MB |
+
+The maintainers' own position (#4728) is that 400–800 MB for the app container, ~1 GB for the whole box,
+is normal. #3909 — "improve memory efficiency for low-memory VPS tiers", closed 2026-04-29 — collected
+OOM-restart reports from 2 GB boxes, shaved roughly 150 MB, and ends with the maintainer prototyping a
+move of the dashboard off the Next.js pages router to TanStack Start on Vite. So **~600 MB is the floor
+and ~1 GB is typical**: fewer containers than Coolify, about the same RAM, concentrated in one process
+instead of spread over four. Note the RAM figures are user reports against v0.26–v0.28 from the issue
+tracker, not measured here; the container inventory and image sizes are read from source.
+
+For scale against what this box runs today — Traefik + shepherd-java + **Jenkins**, where a JVM Jenkins
+idles in the same 500 MB–1 GB range — Dokploy is less a step up in weight than a swap, and it deletes
+Jenkins (`R_periodic_rebuild` becomes an in-product *Schedule*).
+
+### Installation procedure
+
+One command, as root, on Linux, not inside a container:
+
+```bash
+curl -sSL https://dokploy.com/install.sh | sh
+```
+
+The script then: refuses to continue if **anything is listening on :80, :443 or :3000**; installs Docker
+pinned to 28.5.0 if missing (and `apt-mark hold`s the packages); runs `docker swarm leave --force`
+followed by `docker swarm init --advertise-addr <private IP, else public>`; `docker network rm -f
+dokploy-network` and recreates it as an attachable overlay; `mkdir -p /etc/dokploy && chmod 777
+/etc/dokploy`; generates the Postgres password and a Better-Auth secret into **docker secrets**; creates
+the three services above; and prints `http://<ip>:3000`, where you register the first user. Env knobs:
+`DOKPLOY_VERSION` (`latest`/`canary`/a tag), `ADVERTISE_ADDR`, `DOCKER_SWARM_INIT_ARGS` and
+`ENDPOINT_MODE=dnsrr` for kernels without IPVS.
+
+Three things worth knowing before running this on a Shepherd box:
+
+- **It is not co-installable, by design.** The port checks abort on this repo's own Traefik, and
+  `docker swarm leave --force` plus `docker network rm -f dokploy-network` run *before* anything is
+  created. This is a fresh or wiped box, not something to try alongside `install`.
+- **It does not touch `/etc/docker/daemon.json`** — so this repo's enlarged `default-address-pools`
+  survive, and are also beside the point: swarm **overlay** networks come from the swarm's own pool,
+  fixed at `swarm init` time, and the installer runs that without `--default-addr-pool` unless you set
+  `DOCKER_SWARM_INIT_ARGS`. That is the >28-network wall this repo already hit once, sitting in the one
+  place a later fix cannot reach (see *How to settle it*).
+- **Traefik's config is a host file, not a click path.** `/etc/dokploy/traefik/traefik.yml` is
+  bind-mounted, but written by the `dokploy` container on first boot — hence the installer's `sleep 4`,
+  and hence the code in `traefik-setup.ts` that deletes `traefik.yml` when docker has already created it
+  as a *directory*. ACME state lands in `/etc/dokploy/traefik/dynamic/acme.json`. Good news for the
+  guide: the wildcard DNS-01 recipe is a checked-in file patch.
+
 ## Sources
 
 - Repo metadata: GitHub API on 2026-09-09.
@@ -531,6 +622,20 @@ Three things worth knowing before running this on a Shepherd box:
   [Schedule API](https://docs.dokploy.com/docs/api/schedule),
   [Wildcard via Traefik DNS challenge](https://www.naps62.com/posts/wildcard-ssl-in-dokploy),
   [Licence](https://github.com/Dokploy/dokploy/blob/canary/LICENSE.MD).
+- Dokploy footprint chapter, read on 2026-09-09 —
+  [`install.sh`](https://dokploy.com/install.sh) as served that day,
+  [`Dockerfile`](https://github.com/Dokploy/dokploy/blob/canary/Dockerfile),
+  [`packages/server/src/setup/traefik-setup.ts`](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/setup/traefik-setup.ts),
+  [`packages/server/src/setup/monitoring-setup.ts`](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/setup/monitoring-setup.ts),
+  [installation requirements](https://docs.dokploy.com/docs/core/installation),
+  image sizes from the Docker Hub tags API
+  ([`dokploy/dokploy`](https://hub.docker.com/r/dokploy/dokploy/tags),
+  [`dokploy/monitoring`](https://hub.docker.com/r/dokploy/monitoring/tags));
+  Redis removal: [#4645 in-memory deployment queue](https://github.com/Dokploy/dokploy/pull/4645),
+  [#4930 remove leftover Redis infrastructure](https://github.com/Dokploy/dokploy/pull/4930);
+  memory reports: [#3755 idle usage doubled in v0.27.1](https://github.com/Dokploy/dokploy/issues/3755),
+  [#3909 memory efficiency for low-memory VPS tiers](https://github.com/Dokploy/dokploy/issues/3909),
+  [discussion #4728 "why Dokploy uses so much memory"](https://github.com/Dokploy/dokploy/discussions/4728).
 - Dokploy backup/restore: [Backups](https://docs.dokploy.com/docs/core/backups),
   [Restore](https://docs.dokploy.com/docs/core/databases/restore).
 - Dokku: [Resource management](https://dokku.com/docs/advanced-usage/resource-management/),
