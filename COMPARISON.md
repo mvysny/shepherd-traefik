@@ -32,11 +32,16 @@ relaxed since (each marked inline, so the trail stays readable):
   between projects is a no-go: one project can pollute another's Maven artifacts, accidentally or
   deliberately. Not a preference — it is why this repo has `/var/cache/shepherd/docker/$PROJECT_ID` at
   all; `D_no_shared_cache` in `DECISIONS.md` has the reasoning. It is also the requirement that
-  survives every candidate unbeaten — see *Build caches* below.
+  splits the field: Coolify, Dokploy and CapRover leave it to each app's Dockerfile, Dokku enforces it
+  — see *Build caches* below.
 - `R_java_docker` — **added 2026-09-09:** run JVM apps — Vaadin-Boot or Spring-Boot, `java -jar` in
   the app's own `Dockerfile`, listening on 8080 — as ordinary containers. No language detection or
   buildpack magic is wanted; the `Dockerfile` is the contract. The interesting part is not "can it run
-  a JVM" (they all can) but what each product does with `EXPOSE 8080`.
+  a JVM" (they all can) but what each product does with `EXPOSE 8080`. **In tension with
+  `R_cache_isolation` since 2026-09-09:** whoever writes the Dockerfile also names the build caches, so
+  an in-repo Dockerfile hands an untrusted repo the choice of which cache it shares. Holding both
+  requirements means the platform must generate the Dockerfile — which is what "no buildpack magic"
+  rules out. See *What each product accepts as build input*; unresolved, no `D_` yet.
 - `R_periodic_rebuild` — rebuild **on a schedule**, not only on git push, because Shepherd hosts
   repos it doesn't own. Why polling rather than webhooks or push-to-deploy, and what it buys:
   `D_poll_scm` in `DECISIONS.md`. A candidate that can only deploy on push fails this box.
@@ -85,9 +90,9 @@ Legend: ✅ built in · 🟡 possible but needs manual config or an external cro
 
 | Requirement | Shepherd-Traefik | Coolify | Dokploy | Dokku | CapRover |
 |---|---|---|---|---|---|
-| `R_build_dockerfile` | ✅ Jenkins + buildx, build mem/CPU limits | ✅ Dockerfile is a first-class build pack | ✅ Dockerfile / Nixpacks / Buildpacks | ✅ Dockerfile / CNB / Herokuish; build limits via `resource:limit --process-type build` | ✅ via `captain-definition` pointing at the Dockerfile |
-| `R_build_cache` | ✅ per-project buildx `type=local` cache dir | 🟡 cache mounts work; cache is shared box-wide, and injected build args broke caching outright for a stretch of the v4 betas (#7040 — fixed, `SOURCE_COMMIT` now excluded by default) | 🟡 cache mounts work; shared, per-app `--no-cache` toggle, unbounded cache growth is a filed issue (#1031) | 🟡 cache mounts work and are **documented** (free on Docker 24+, else `DOCKER_BUILDKIT=1` in `/etc/default/dokku`); shared, not per-project | 🟡 cache mounts work (builds go through dockerode with `version: '2'`), but no way to pass extra build flags at all (#664) |
-| `R_cache_isolation` | 🟡 per-project `--cache-to` for the *layer* cache, enforced by the build command — but the `/root/.gradle` cache mount `install` recommends is shared box-wide (`D_no_shared_cache`, *Known gap*) | 🟡 by convention only — a per-project `id=` in each Dockerfile; nothing enforces it | 🟡 convention only | 🟡 convention only | ❌ convention only, and no build flags at all (#664) |
+| `R_build_dockerfile` | ✅ Jenkins + buildx, build mem/CPU limits | ✅ Dockerfile is a first-class build pack | ✅ Dockerfile / Nixpacks / Buildpacks | ✅ Dockerfile / CNB / Herokuish; build limits via `resource:limit --process-type build` | ✅ via `captain-definition` — a path, or the Dockerfile inline as `dockerfileLines` |
+| `R_build_cache` | ✅ per-project buildx `type=local` cache dir | 🟡 cache mounts work; cache is shared box-wide, and injected build args broke caching outright for a stretch of the v4 betas (#7040 — fixed, `SOURCE_COMMIT` now excluded by default) | 🟡 cache mounts work; shared, per-app `--no-cache` toggle, unbounded cache growth is a filed issue (#1031) | ✅ two ways: cache mounts, **documented** (free on Docker 24+, else `DOCKER_BUILDKIT=1` in `/etc/default/dokku`); or a per-app cache volume on the buildpack builders | 🟡 cache mounts work (builds go through dockerode with `version: '2'`), but no way to pass extra build flags at all (#664) |
+| `R_cache_isolation` | 🟡 per-project `--cache-to` for the *layer* cache, enforced by the build command — but the `/root/.gradle` cache mount `install` recommends is shared box-wide (`D_no_shared_cache`, *Known gap*) | 🟡 by convention only — a per-project `id=` in each Dockerfile; nothing enforces it | 🟡 convention only | 🟡 dockerfile builder: **parity with here** — `docker-options … build` forwards `--cache-to`/`--cache-from`, so the layer cache is per-app and enforced by the build command; the `RUN --mount` half is still convention · ✅ buildpack builders: a per-app `cache-$APP` volume, fully enforced — but then there is no Dockerfile (`R_java_docker`) | ❌ convention only, and no build flags at all (#664) |
 | `R_java_docker` | ✅ `Dockerfile`, port 8080 by contract | ✅ Dockerfile build pack; port per app (*Ports Exposes*) | ✅ Dockerfile build type; container port per app | 🟡 runs fine, but `EXPOSE 8080` makes Dokku publish the app on **:8080**, so each app needs `dokku ports:set app http:80:8080 https:443:8080` | ✅ Dockerfile via `captain-definition`; container HTTP port per app |
 | `R_periodic_rebuild` | ✅ Jenkins poll-SCM schedule | 🟡 push webhooks only; cron an HTTP call to `/deploy?uuid=…` with an API token | 🟡 push webhooks; cron `POST /api/application.deploy`, or a Dokploy **Schedule** (cron task) that calls it — the deploy is *unconditional*, there is no build-if-changed anywhere in the tree | 🟡 `dokku git:sync --build-if-changes APP URL` is exactly a poll — but you cron it yourself, and pick the flag deliberately: plain `git:sync` builds nothing, `--build` always, `--build-if-changes` only on a change | 🟡 push webhooks only; cron a call to the webhook URL |
 | `R_run_docker` | ✅ (via shepherd-java) | ✅ mem/CPU limits in *Advanced* | ✅ mem/CPU limits per app (Docker Swarm services) | ✅ `resource:limit --cpu --memory` | 🟡 Swarm; limits only through raw *Service Update Override* JSON |
@@ -136,8 +141,9 @@ that sentence — *corruption* by concurrent writers, which serial builds or `sh
 in `DECISIONS.md` argues both out in full: why `id` defaulting to `target` puts every project in the
 same directory, why an unkeyed cache mount is categorically different from the content-keyed layer
 cache, and why `mvn install` of a shared `1.0-SNAPSHOT` is the path that bites before anything hostile
-does. Read it there; this chapter only sizes the candidates up against the conclusion, which is that
-**no product in the field enforces isolation, and only the mechanism differs.**
+does. Read it there; this chapter sizes the candidates up against it. The short version, **corrected
+2026-09-09:** the field does not enforce isolation, *except Dokku*, which enforces it twice over by two
+different mechanisms — and one of them is the same mechanism this repo uses.
 
 **What actually isolates, and which candidates expose it:**
 
@@ -145,23 +151,41 @@ does. Read it there; this chapter only sizes the candidates up against the concl
 |---|---|---|
 | `id=<project>` on the cache mount | ❌ cooperation — the *app's* Dockerfile picks the id, or omits it | ✅ everywhere, being nothing but a Dockerfile line |
 | one **buildx builder per project** | ✅ the mount lives in the builder's own state | ❌ **none** — there is no per-app `BUILDX_BUILDER` knob anywhere |
-| one **cache directory per project** (what this repo does) | ✅ the flag is on the *build command*, so no foreign artifact can enter | ❌ **none** lets you template `--cache-to`/`--cache-from` per app |
+| one **cache directory per project** (what this repo does) | ✅ the flag is on the *build command*, so no foreign artifact can enter | ✅ **Dokku only** — `docker-options:add APP build '--cache-to …'`; ❌ Coolify, Dokploy, CapRover |
+| one **cache volume per app**, mounted by the platform | ✅ the app never sees the cache's name, so it cannot address another's | ✅ **Dokku's buildpack builders** (`cache-$APP` at `/cache`, `CACHE_PATH=/cache`); CNB `pack` likewise via `--cache`/`--cache-image` |
 | a **Maven repo proxy** (Nexus et al.) | ❌ cooperation — needs each app's `settings.xml`/`build.gradle` to point at it, and can't be forced at the network level (Central is https) | 🟡 orthogonal: a container you'd run alongside any of them |
 
-Two candidate-specific notes on the third row, since it is the one that looks closest to being
-available: **CapRover cannot pass extra flags to `docker build` at all** (#664), and **Dokku's
-`docker-options … build` is not the exception it appears to be** — those are *container* options handed
-to the builder ("the `dockerfile` builder does not support mounted volumes"), not `docker build` flags.
+**Dokku's `docker-options … build` really is the exception** — a *previous* revision of this chapter said
+it wasn't, on the strength of the "the `dockerfile` builder does not support mounted volumes" note in the
+docs, and that was wrong. It depends entirely on the builder, because both builders read the same
+`docker-args-build` trigger and then use it differently:
+
+- `plugins/builder-dockerfile/builder-build` runs the options through a **flag allowlist** and appends
+  them to `docker image build`. The allowlist includes `--build-arg`, `--cache-from`, **`--cache-to`**,
+  `--secret`, `--ssh`, `--target`, `--no-cache`, `--platform`, `--network`, `--memory`, `--shm-size`,
+  `--ulimit`, `--label`, `--progress`, `--provenance`, `--sbom`; anything not on it is silently dropped.
+  And on Docker 23+ `docker image build` routes to buildx (verified on Docker 29: `docker image build
+  --help` prints `Usage: docker buildx build` and lists `--cache-to`), so `type=local` export works.
+  **`shepherd-build`'s exact per-project cache flags therefore survive a migration to Dokku**, as one
+  `docker-options:add` per app.
+- `plugins/builder-herokuish/builder-build` hands the same options to `docker container create` instead
+  — *there* they are container options, which is what the docs note is about.
+
+**CapRover still cannot pass extra flags to `docker build` at all** (#664), and neither Coolify nor
+Dokploy exposes a knob for them.
 
 One `Dockerfile`-authoring note that carries over to any of them: mount `caches/modules-2` and `wrapper`
 specifically rather than all of `/root/.gradle`, which also shares `init.d/` — an init script dropped
 there runs in *every* later Gradle build on the box.
 
-So the honest reading: **`R_build_cache` is satisfied everywhere and `R_cache_isolation` nowhere.** For
-repos we don't own, the only safe cache under any of the four is the content-keyed *layer* cache (which
-is why a `COPY pom.xml` + `RUN mvn dependency:go-offline` layer earns its keep), and everything faster
-requires the project to opt in. That is the one place where retiring this repo is a genuine regression
-rather than a deletion.
+So the honest reading: **`R_build_cache` is satisfied everywhere; `R_cache_isolation` is satisfied by
+Dokku and by nobody else.** Under Coolify, Dokploy or CapRover the only safe cache for a repo we don't
+own is the content-keyed *layer* cache (which is why a `COPY pom.xml` + `RUN mvn dependency:go-offline`
+layer earns its keep), and everything faster requires the project to opt in — for those three, retiring
+this repo is a genuine regression rather than a deletion. Under Dokku it is not a regression at all:
+the dockerfile builder reproduces today's half-implementation exactly, and the buildpack builders close
+the half that is still open *here* — at the price of `R_java_docker` as currently worded (see
+*What each product accepts as build input*, next).
 
 Three traps worth carrying into the new repo:
 
@@ -181,6 +205,49 @@ Three traps worth carrying into the new repo:
   week; under any candidate the successor cron (`docker buildx prune`, needed anyway — Dokploy's
   unbounded cache growth is issue #1031) has to stay weekly-ish rather than nightly, or it defeats the
   requirement it is meant to support.
+
+## What each product accepts as build input
+
+The question behind this section: **must the build recipe come from the hosted repo, or can the platform
+supply it?** It matters because an in-repo `Dockerfile` is untrusted input that names its own cache — a
+repo can write `id=` pointing anywhere, so the app, not the platform, decides which cache it shares.
+Generating the Dockerfile from a declared build command plus a list of directories to cache moves that
+choice to the platform. Read from source and docs on 2026-09-09:
+
+| | Build recipes accepted | Can the *platform* own the recipe? | Real `docker build` flags? |
+|---|---|---|---|
+| **Shepherd-Traefik** | the repo's `Dockerfile`, root of the tree | ❌ the repo *is* the contract | ✅ it *is* the build command |
+| **Dokku** | 5 builders (`builder:set APP selected dockerfile\|herokuish\|pack\|lambda\|null`); Dockerfile path movable within the tree (`builder-dockerfile:set APP dockerfile-path .dokku/Dockerfile`), never outside it | ✅ **three ways** — buildpacks (recipe is the platform's), `builder-null` + `git:from-image`/`git:load-image` (you build, Dokku only runs), or `git:from-archive` with a tree you assembled | ✅ allowlisted, dockerfile builder only |
+| **Dokploy** | `buildType`: `nixpacks` \| `railpack` \| `dockerfile` (path + context + target) \| `buildpack` (Heroku/Paketo) \| `static`; commands overridable only through `NIXPACKS_*`/`RAILPACK_*` env | 🟡 `sourceType` includes `docker` (prebuilt image) and `drop` (upload a zip), so an assembled tree can reach it | ❌ build args and secrets only |
+| **Coolify** | build packs: nixpacks \| static \| Dockerfile \| compose \| **Docker Image**; custom install/build/start commands, **Nixpacks only** | 🟡 "Docker Image" for prebuilt images; otherwise the Dockerfile comes from a repo | ❌ |
+| **CapRover** | `captain-definition`: `templateId`, `dockerfilePath`, **`dockerfileLines`** (Dockerfile inline, as a JSON array), or `imageName` | 🟡 inline lines are still a file in the repo, unless you build the deploy tarball yourself | ❌ none at all (#664) |
+
+**Generating the Dockerfile is a buildpack, and Dokku already ships two.** `builder-herokuish` creates a
+docker volume **`cache-$APP`** per app, mounts it at `/cache` and sets `CACHE_PATH=/cache`; the app never
+learns the cache's name, and `dokku repo:purge-cache APP` clears exactly that one. `builder-pack` (CNB)
+does the same through `--cache`/`--cache-image`. That is the design — platform-owned recipe, platform-named
+per-project cache — already implemented, which is worth pricing against writing one.
+
+**It collides with `R_java_docker` as worded** ("no language detection or buildpack magic is wanted; the
+`Dockerfile` is the contract"). The two requirements now pull in opposite directions: whoever writes the
+Dockerfile also names the caches, so `R_cache_isolation` wants the platform to write it and
+`R_java_docker` wants the repo to. That is a decision to take, not a gap to close.
+
+Three costs of taking the generate-it-ourselves road, whichever product ends up underneath:
+
+- **You inherit base-image policy.** Once the `FROM` is ours, every project needs a declared JDK and an
+  escape hatch for native dependencies — the slow slide into maintaining a buildpack.
+- **You need a delivery channel for the generated file.** Dokku takes an assembled tree directly
+  (`git:from-archive`, or a push of a tree with the Dockerfile injected) and Dokploy takes a `drop` zip;
+  Coolify and CapRover effectively want it in a repo we control, i.e. a mirror per project. **Or skip
+  the channel entirely:** build in Shepherd exactly as today, and hand the platform a prebuilt image —
+  `builder-null` + `git:from-image`, Dokploy `sourceType: docker`, Coolify "Docker Image", CapRover
+  `imageName`. All four support that, today's per-project `--cache-to` is kept verbatim, and the cache
+  question leaves the product comparison altogether.
+- **A generated Dockerfile is not a sandbox.** The declared build command still runs the repo's own
+  Maven/Gradle logic in the build container with that project's cache mounted. What is gained is that
+  the *namespace* is ours, so pollution stays inside one project; build args remain visible to it, and
+  the build memory/CPU limits remain the only bound on what it does.
 
 ## Java apps: they all run, the friction is the port
 
@@ -332,17 +399,21 @@ nobody** (Dokploy and CapRover flip to ✅ on `R_no_kubernetes`, but CapRover st
 *and* resource limits, so it remains the weakest match). **Accepting a CLI promoted Dokku from
 disqualified to arguably the best fit.** **Dropping the restore requirement then took away Dokku's
 single biggest structural advantage** — no control-plane database to lose no longer wins anything — and
-**the added requirements don't put it back** — `R_java_docker` and `R_build_cache` are satisfied by all
-four, and `R_cache_isolation` by none of them. It stays a three-horse race, now on narrower grounds:
-Dokku still wins on *subtracting* moving parts, not on recoverability.
+**the added requirements put it back** — `R_java_docker` and `R_build_cache` are satisfied by all four,
+but `R_cache_isolation` is satisfied *only* by Dokku (corrected 2026-09-09; the earlier reading, that no
+product enforced isolation, was wrong about Dokku's build flags). So it is no longer a three-horse race
+on equal terms: Dokku wins on *subtracting* moving parts, and now also on the one requirement the other
+three cannot meet.
 
-**One requirement now beats the entire field: `R_cache_isolation`.** Per-project *layer* caches are
-enforced today by a flag on the build command — the dependency cache mount is a gap here too, see
-`D_no_shared_cache` — and every candidate replaces even that with one shared,
-unkeyed, root-writable cache mount whose isolation depends on each app's own Dockerfile. Nothing in the
-comparison changes that, so it is a standing cost of retiring — to be paid either by accepting
-layer-cache-only builds for foreign repos, or by running a Maven proxy and requiring cooperation from
-the projects that use it (see *Build caches*).
+**`R_cache_isolation` splits the field in two — corrected 2026-09-09.** Coolify, Dokploy and CapRover
+replace this repo's per-project cache with one shared, unkeyed, root-writable cache mount whose isolation
+depends on each app's own Dockerfile; for them it stays a standing cost of retiring, paid either by
+accepting layer-cache-only builds for foreign repos or by running a Maven proxy the projects have to
+cooperate with. **Dokku is the exception, twice:** its dockerfile builder forwards `--cache-to`/
+`--cache-from` to `docker image build` (so `shepherd-build`'s flags migrate as-is, reproducing today's
+half-implementation), and its buildpack builders mount a per-app `cache-$APP` volume the app cannot
+name, which closes the dependency-cache half that is still open *here*. The price of that second option
+is `R_java_docker` as worded — see *Build caches* and *What each product accepts as build input*.
 
 **Dokku** — the strongest match on the requirements that are hard to glue, and the only contender that
 *subtracts* from the current architecture instead of substituting for it:
@@ -353,6 +424,11 @@ the projects that use it (see *Build caches*).
   recoverability: stable container names (so `lazydocker`/`ctop` show apps, not Swarm task IDs), no
   Postgres to upgrade, nothing to keep healthy but Dokku itself.
 - Bash + Go plugins is the smallest conceptual delta from Bash + compose.
+- **It is the only one that accepts this repo's build command.** `docker-options:add APP build
+  '--cache-to …'` reaches `docker image build` through an allowlist, so the per-project layer cache
+  migrates verbatim; and if the Dockerfile-is-the-contract rule is ever traded away, `builder-herokuish`
+  / `builder-pack` give a per-app cache the app cannot name. Alternatively `builder-null` +
+  `git:from-image` keeps building here and lets Dokku only run the result.
 - **It can keep Traefik.** The official Traefik proxy plugin is label-driven, exactly like this repo, and
   supports global DNS-01 — so the current Traefik knowledge is an asset rather than a sunk cost, and the
   wildcard gap narrows to "add `tls.domains` labels" (or stay on nginx + `dokku-global-cert`).
@@ -409,14 +485,18 @@ versus checked-in file. It also shakes out the Swarm-specific unknowns as a side
 Since the goal is to retire `shepherd*` entirely, the naming contract and `config.json` are
 *deletions*, not losses. What actually needs re-implementing, documenting or consciously dropping:
 
-- **The dependency-cache story** (`R_build_cache`, `R_cache_isolation`) — the biggest chapter, and the
-  only genuine regression. The per-project buildx local caches go away (no product exposes per-app
-  `--cache-to`), replaced by BuildKit **cache mounts written into each app's Dockerfile**, which are
-  shared box-wide. So the chapter has to take a position: serial builds plus `sharing=locked` for
-  *corruption*, and for *pollution* either layer-cache-only builds for repos we don't own, or a Maven
-  repo proxy plus a per-project `id=` convention for the ones we do. Plus a buildkitd GC policy so the
-  cache outlives the rebuild interval, and the successor to `shepherd-clearcache`: a weekly — not
-  nightly — `docker buildx prune`.
+- **The dependency-cache story** (`R_build_cache`, `R_cache_isolation`) — the biggest chapter, and a
+  genuine regression **only if the product isn't Dokku**. On Coolify, Dokploy or CapRover the
+  per-project buildx local caches go away (none of the three exposes per-app `--cache-to`), replaced by
+  BuildKit **cache mounts written into each app's Dockerfile**, which are shared box-wide; there the
+  chapter has to take a position: serial builds plus `sharing=locked` for *corruption*, and for
+  *pollution* either layer-cache-only builds for repos we don't own, or a Maven repo proxy plus a
+  per-project `id=` convention for the ones we do. On Dokku the chapter is instead a *choice* — carry
+  `--cache-to` over per app and keep today's known gap, switch to a buildpack builder and let the
+  platform own both the recipe and a per-app `cache-$APP` volume, or keep building here and deploy the
+  image with `builder-null` + `git:from-image`. Either way: a buildkitd GC policy so the cache outlives
+  the rebuild interval, and the successor to `shepherd-clearcache` — a weekly, not nightly,
+  `docker buildx prune`.
 - **A wildcard-cert renewal cron**, for any product that doesn't own the whole ACME flow — the largest
   chapter for Dokku *if* it stays on nginx + `dokku-global-cert`; a handful of `traefik:set` lines if it
   uses Dokku's Traefik plugin, and a `traefik.yml` patch for Dokploy/Coolify.
@@ -667,6 +747,17 @@ Three things worth knowing before running this on a Shepherd box:
   [Application management](https://dokku.com/docs/deployment/application-management/),
   [Monitoring stance (maintainer, discussion #5681)](https://github.com/dokku/dokku/discussions/5681),
   [Dokku Pro](https://github.com/dokku/dokku/blob/master/docs/enterprise/pro.md).
+- Build input, read on 2026-09-09:
+  [Dokku builder management](https://dokku.com/docs/deployment/builders/builder-management/),
+  [Dokku dockerfile builder — `builder-dockerfile:set … dockerfile-path`](https://dokku.com/docs/deployment/builders/dockerfiles/),
+  [Dokku `git:from-image` / `git:load-image` / `git:from-archive`](https://dokku.com/docs/deployment/methods/git/),
+  [Dokku `repo:purge-cache`](https://dokku.com/docs/advanced-usage/repository-management/),
+  [Dokploy build types](https://docs.dokploy.com/docs/core/applications/build-type),
+  Dokploy `sourceType` (`github`/`docker`/`git`/`gitlab`/`bitbucket`/`gitea`/`drop`) and `buildType`
+  enums from
+  [`packages/server/src/db/schema/application.ts`](https://github.com/Dokploy/dokploy/blob/canary/packages/server/src/db/schema/application.ts),
+  [Coolify build packs and Docker Image resources](https://coolify.io/docs/applications/),
+  [CapRover `captain-definition` — `dockerfileLines`, `imageName`](https://caprover.com/docs/captain-definition-file.html).
 - Admin interfaces: [Coolify CLI docs](https://next.coolify.io/docs/cli/what-is-the-coolify-cli),
   [Coolify API reference](https://coolify.io/docs/api-reference/api/),
   [Dokploy CLI docs](https://docs.dokploy.com/docs/cli),
@@ -680,8 +771,18 @@ Three things worth knowing before running this on a Shepherd box:
   parallel-build / `sharing=locked` problem](https://mvysny.github.io/docker-build-cache/),
   [BuildKit cache mount reference — `id` defaults to `target`, `sharing=shared|private|locked`, and
   "another build may overwrite the files"](https://docs.docker.com/reference/dockerfile/#run---mounttypecache),
-  [Dokku `docker-options` — build-phase options are *container* options for builders, not `docker build`
-  flags](https://dokku.com/docs/advanced-usage/docker-options/),
+  [Dokku `docker-options`](https://dokku.com/docs/advanced-usage/docker-options/) — build-phase options
+  are `docker build` flags for the *dockerfile* builder and `docker container create` options for the
+  *herokuish* one, read from `dokku/dokku@main` on 2026-09-09:
+  [`plugins/builder-dockerfile/builder-build`](https://github.com/dokku/dokku/blob/master/plugins/builder-dockerfile/builder-build)
+  (the flag allowlist, `--cache-to` included, appended to `docker image build`),
+  [`plugins/builder-herokuish/builder-build`](https://github.com/dokku/dokku/blob/master/plugins/builder-herokuish/builder-build)
+  (the `cache-$APP` volume at `/cache`, `CACHE_PATH=/cache`, and the same options going to
+  `docker container create`),
+  [`plugins/builder-pack/builder-build`](https://github.com/dokku/dokku/blob/master/plugins/builder-pack/builder-build)
+  (`--cache`/`--cache-image` passthrough to `pack`);
+  that `docker image build` routes to buildx — and so accepts `--cache-to` — verified locally on
+  Docker 29.1.3 (`docker image build --help` prints `Usage: docker buildx build`),
   ["Prevent your Coolify deploys from randomly starting without a build cache" — buildkitd's own GC
   evicting unused entries](https://www.loopwerk.io/articles/2026/docker-buildkit-cache-coolify/),
   [Coolify: Dockerfile build pack — build-arg injection, `SOURCE_COMMIT` excluded to preserve the
