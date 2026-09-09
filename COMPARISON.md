@@ -20,10 +20,23 @@ release dates will drift; the feature claims are the part worth re-checking befo
 
 ## The boxes
 
-The main responsibilities from `CLAUDE.md`, phrased as requirements:
+The main responsibilities from `CLAUDE.md`, phrased as requirements, plus what has been added or
+relaxed since (each marked inline, so the trail stays readable):
 
 - `R_build_dockerfile` — build the app from the `Dockerfile` at the repo root, on the server, with
-  per-project build caches and memory/CPU limits on the build.
+  memory/CPU limits on the build.
+- `R_build_cache` — **added 2026-09-09:** dependency caching that survives between builds. A
+  Maven/Gradle build must not re-download the whole dependency tree from the internet on every
+  scheduled rebuild.
+- `R_cache_isolation` — **added 2026-09-09:** and the cache must be **per project**. A cache shared
+  between projects is a no-go: one project can pollute another's Maven artifacts, accidentally or
+  deliberately. This is not a preference but the reason this repo has
+  `/var/cache/shepherd/docker/$PROJECT_ID` at all (shepherd issue #3), and it is the requirement that
+  survives every candidate unbeaten — see *Build caches* below.
+- `R_java_docker` — **added 2026-09-09:** run JVM apps — Vaadin-Boot or Spring-Boot, `java -jar` in
+  the app's own `Dockerfile`, listening on 8080 — as ordinary containers. No language detection or
+  buildpack magic is wanted; the `Dockerfile` is the contract. The interesting part is not "can it run
+  a JVM" (they all can) but what each product does with `EXPOSE 8080`.
 - `R_periodic_rebuild` — rebuild **on a schedule**, not only on git push. Shepherd hosts repos it
   doesn't necessarily own (example projects, addons), so it can't rely on installing a webhook in
   every upstream repo; polling also picks up base-image and dependency updates.
@@ -43,9 +56,12 @@ The main responsibilities from `CLAUDE.md`, phrased as requirements:
   is explicitly accepted** (decided 2026-09-09): on a single node it is `docker swarm init` once and
   then the PaaS's problem, it is upstream in the engine already installed, and Mirantis has committed
   to supporting it through at least 2030. Swarm is feature-stable, not dying.
-- `R_restore_the_box` — bring the whole platform back on fresh hardware from a backup. Today this is
-  trivial (back up one JSON file); any product with a database-backed control plane replaces that with
-  a documented backup/restore drill, which the new repo then has to own and test.
+- `R_restore_the_box` — bring the whole platform back on fresh hardware. **Relaxed 2026-09-09: no
+  backup restore needed.** The hosted apps are demos and can simply be re-created from their git
+  repos, so a from-scratch reinstall plus re-adding the projects is an acceptable disaster recovery.
+  A database-backed control plane is therefore no longer a cost, and this box no longer discriminates
+  between candidates; all that survives of it is that the install must be reproducible *from the
+  guide*, which is the new repo's whole job anyway.
 
 ## Candidates considered
 
@@ -68,16 +84,158 @@ Legend: ✅ built in · 🟡 possible but needs manual config or an external cro
 
 | Requirement | Shepherd-Traefik | Coolify | Dokploy | Dokku | CapRover |
 |---|---|---|---|---|---|
-| `R_build_dockerfile` | ✅ Jenkins + buildx, per-project cache, build mem/CPU limits | ✅ Dockerfile is a first-class build pack | ✅ Dockerfile / Nixpacks / Buildpacks | ✅ Dockerfile / CNB / Herokuish; build limits via `resource:limit --process-type build` | ✅ via `captain-definition` pointing at the Dockerfile |
+| `R_build_dockerfile` | ✅ Jenkins + buildx, build mem/CPU limits | ✅ Dockerfile is a first-class build pack | ✅ Dockerfile / Nixpacks / Buildpacks | ✅ Dockerfile / CNB / Herokuish; build limits via `resource:limit --process-type build` | ✅ via `captain-definition` pointing at the Dockerfile |
+| `R_build_cache` | ✅ per-project buildx `type=local` cache dir | 🟡 cache mounts work; cache is shared box-wide, and injected build args broke caching outright for a stretch of the v4 betas (#7040 — fixed, `SOURCE_COMMIT` now excluded by default) | 🟡 cache mounts work; shared, per-app `--no-cache` toggle, unbounded cache growth is a filed issue (#1031) | 🟡 cache mounts work and are **documented** (free on Docker 24+, else `DOCKER_BUILDKIT=1` in `/etc/default/dokku`); shared, not per-project | 🟡 cache mounts work (builds go through dockerode with `version: '2'`), but no way to pass extra build flags at all (#664) |
+| `R_cache_isolation` | 🟡 per-project `--cache-to` for the *layer* cache, enforced by the build command — but the `/root/.gradle` cache mount `install` recommends is shared box-wide (`D_no_shared_cache`, *Known gap*) | 🟡 by convention only — a per-project `id=` in each Dockerfile; nothing enforces it | 🟡 convention only | 🟡 convention only | ❌ convention only, and no build flags at all (#664) |
+| `R_java_docker` | ✅ `Dockerfile`, port 8080 by contract | ✅ Dockerfile build pack; port per app (*Ports Exposes*) | ✅ Dockerfile build type; container port per app | 🟡 runs fine, but `EXPOSE 8080` makes Dokku publish the app on **:8080**, so each app needs `dokku ports:set app http:80:8080 https:443:8080` | ✅ Dockerfile via `captain-definition`; container HTTP port per app |
 | `R_periodic_rebuild` | ✅ Jenkins poll-SCM schedule | 🟡 push webhooks only; cron an HTTP call to `/deploy?uuid=…` with an API token | 🟡 push webhooks; cron `POST /api/application.deploy`, or a Dokploy **Schedule** (cron task) that calls it | 🟡 `dokku git:sync --build-if-changes APP URL` is exactly a poll — but you cron it yourself | 🟡 push webhooks only; cron a call to the webhook URL |
 | `R_run_docker` | ✅ (via shepherd-java) | ✅ mem/CPU limits in *Advanced* | ✅ mem/CPU limits per app (Docker Swarm services) | ✅ `resource:limit --cpu --memory` | 🟡 Swarm; limits only through raw *Service Update Override* JSON |
-| `R_https_wildcard` | ✅ Traefik, DNS challenge, wildcard | 🟡 Traefik or Caddy; documented recipe to switch the resolver to DNS challenge + wildcard | 🟡 Traefik; default is HTTP-01, community recipes edit `traefik.yml` for a DNS-challenge resolver | 🟡 two routes, neither turnkey — see *Dokku: wildcard certs* below | 🟡 default HTTP-01 per app; DNS-01 only via *Certbot override*; long-open issues (#1444, #1761) |
+| `R_https_wildcard` | ✅ Traefik, DNS challenge, wildcard | 🟡 Traefik or Caddy; documented recipe to switch the resolver to DNS challenge + wildcard | 🟡 Traefik; default is HTTP-01, community recipes edit `traefik.yml` for a DNS-challenge resolver | 🟡 **three** routes, none fully turnkey — incl. the official Traefik proxy plugin with global `challenge-mode dns`; see *Dokku: routing and wildcard certs* below | 🟡 default HTTP-01 per app; DNS-01 only via *Certbot override*; long-open issues (#1444, #1761) |
 | `R_observe_stats` | ❌ here; shepherd-java Web Admin shows them | ✅ *Sentinel*: per-container CPU/mem history graphs (not for Compose apps) | ✅ built-in per-service CPU/mem/net/disk | 🟡 no monitoring by design (“will never manage monitoring”), but apps are plain containers, so `docker stats` / `docker logs` work directly — CLI-acceptable since the relaxation | 🟡 bundled NetData (server-level; per-container via cgroups charts) |
 | `R_admin_interface` | ✅ Web Admin + `shepherd-cli` | ✅ web + official CLI + REST API | ✅ web + official CLI + OpenAPI | 🟡 official **CLI only** (no HTTP API; reports do emit `--format json`); web is third-party | ✅ web + official CLI + API |
 | `R_single_host` | ✅ | ✅ (multi-server optional over SSH) | ✅ | ✅ | ✅ |
 | `R_no_kubernetes` | ✅ plain Docker | ✅ plain Docker | ✅ Docker Swarm — accepted | ✅ plain Docker | ✅ Docker Swarm — accepted |
-| `R_restore_the_box` | ✅ back up one JSON file | 🟡 Postgres control plane; documented S3 backup + restore, but a fresh instance generates a new `APP_KEY` while the dump is encrypted with the old one — a naive restore comes back broken | 🟡 Postgres control plane; **“system restore”** is a named feature explicitly framed for old-server → new-server migration | ✅ state is files under `/home/dokku` + git remotes; no database to dump | 🟡 control-plane state in its own container |
-| Weight / stack | Bash + compose; Jenkins is the heavy part | Laravel/PHP + Postgres + Redis + Soketi (~1 GB idle, 4 containers, all mandatory) | Node/Next.js + Postgres + Redis + Traefik | Bash + Go plugins, nginx by default — no control-plane database at all | Node + Docker Swarm + nginx |
+| `R_restore_the_box` (relaxed — reinstall is enough) | ✅ one JSON file | ✅ one-command installer; the Postgres dump and its `APP_KEY` footgun only matter if you want the *old* state back | ✅ installer; “system restore” exists if you ever want it | ✅ installer; state is files under `/home/dokku` + git remotes, no database to dump | ✅ installer |
+| Weight / stack | Bash + compose; Jenkins is the heavy part | Laravel/PHP + Postgres + Redis + Soketi (~1 GB idle, 4 containers, all mandatory) | Node/Next.js + Postgres + Redis + Traefik | Bash + Go plugins; nginx by default, with Traefik/Caddy/HAProxy/OpenResty as official alternatives — no control-plane database at all | Node + Docker Swarm + nginx |
+
+## Build caches: the requirement with no off-the-shelf equivalent
+
+`R_build_cache` splits into two halves that behave completely differently.
+
+**The easy half: cache mounts are the *app's* business, not the platform's.** A line in the app's own
+Dockerfile —
+
+```dockerfile
+RUN --mount=type=cache,target=/root/.m2 mvn -B package -DskipTests
+# Gradle: --mount=type=cache,target=/root/.gradle/caches --mount=type=cache,target=/root/.gradle/wrapper
+```
+
+— keeps the dependency tree in the *builder's* cache, outside any image layer, so it survives across
+builds and across source changes that invalidate every layer. Every candidate supports this, because
+every candidate ultimately runs a BuildKit build:
+
+- **Dokku** documents it outright, under *BuildKit directory caching*, with a worked `RUN --mount`
+  example. On Docker Engine 24+ nothing is needed at all; older engines want
+  `echo "export DOCKER_BUILDKIT=1" | sudo tee -a /etc/default/dokku` (and `BUILDKIT_PROGRESS=plain` if
+  you want full build logs).
+- **Coolify** and **Dokploy** shell out to `docker build` too, where BuildKit is the default (Docker 23+).
+- **CapRover** builds through dockerode rather than the CLI, but passes
+  `version: CaptainConstants.configs.defaultDockerBuildVersion` — which is `'2'`, i.e. BuildKit — in
+  `DockerApi.buildImageFromDockerFile`. So cache mounts work there as well.
+
+That is zero glue, and it complements a `type=local` layer cache rather than duplicating it: the layer
+cache only helps while the `COPY pom.xml` + dependency-resolve layer stays valid, whereas a cache mount
+survives even when it does not. This repo already relies on both — `install` documents exactly this
+`RUN --mount` recipe for `/root/.gradle` — so the mechanism is not new here, only its *scoping* is
+(below, and `D_no_shared_cache`).
+
+**The hard half: that cache is then shared by every project on the box.** These are *two* different
+problems and they need different answers — conflating them is how you end up thinking `sharing=locked`
+solved it.
+
+**Problem 1: corruption (concurrent writers).** With parallel builds against one cache mount, Maven has
+no locking and fails with random errors, potentially corrupting the cache; Gradle writes lock files and
+then times out waiting on them. This is shepherd issue #3, and it *is* what `sharing=locked` /
+`sharing=private` (or simply serial builds, as `install` already pins with
+`concurrentJenkinsBuilders: 1`) fixes.
+
+**Problem 2: pollution (`R_cache_isolation`) — the one with no cheap answer.** Docker documents the
+shared-mutable-state semantics as expected behaviour, not as a bug:
+
+> Cache mounts should only be used for better performance. Your build should work with any contents of
+> the cache directory **as another build may overwrite the files** or GC may clean it if more storage
+> space is needed.
+
+Three facts make that sharper than it sounds:
+
+- **`id` defaults to the value of `target`.** Every project writing `--mount=type=cache,target=/root/.m2`
+  lands in the *same* directory. Nothing scopes it per app, per image or per repo by default.
+- **Cache-mount contents are not part of any cache key** — the crisp difference from the layer cache.
+  Layer cache entries are *content-keyed* (parent digest + instruction + digest of copied files), so for
+  project B to hit A's entry, B's inputs must be identical, in which case the output legitimately is
+  too. A cache mount is the opposite: unkeyed, mutable, and writable as root by every build on the box.
+- **Maven never re-verifies what is already in the local repository.** Checksums are checked at
+  *download* time; an artifact already present is used as-is. Hence
+  `dependency:purge-local-repository` exists as the manual escape hatch.
+
+The path that bites first is not malice, it is **`mvn install`**: multi-module builds install their own
+artifacts into the shared local repo, and a demo farm is full of forks of the same starter — so two
+projects legitimately share `com.example:my-app:1.0-SNAPSHOT`, and the second one silently resolves the
+first one's jar with a green build. Any shared `-SNAPSHOT` dependency behaves the same way.
+
+Gradle is better in one way and worse in another: `caches/modules-2/files-2.1/…/<sha1>/…` is
+content-addressed, so swapping a jar in place is harder — but a mount of all of `/root/.gradle` also
+shares `init.d/` (an init script dropped there runs in *every* later Gradle build), `wrapper/dists/`
+(verified only when `distributionSha256Sum` is set, which starters usually omit) and the build cache.
+Mount `caches/modules-2` and `wrapper` specifically, never the whole directory.
+
+*Proportionately:* a hostile repo already runs arbitrary code as root in its own build and ships an
+image that runs on the box, so it owns *itself* either way. What a shared cache adds is **lateral
+movement** into every other project's artifacts — and Shepherd deliberately hosts repos it doesn't own
+(`R_periodic_rebuild`). That escalation is why CI for untrusted repos does not share a local repository.
+
+**What actually isolates, and what only looks like it does:**
+
+- `id=<project>` on the mount — **cooperation, not enforcement.** A careless or hostile Dockerfile uses
+  another id, or none. Fine as a collision-avoidance convention for the projects that are ours; worth
+  nothing as a boundary.
+- One **buildx builder per project** — the only platform-enforced isolation for cache mounts, since the
+  mount lives in the builder's own state. Cost: a separate layer cache per builder, so disk use
+  balloons. **No candidate exposes it** (there is no per-app `BUILDX_BUILDER` knob).
+- One **cache directory per project** — what this repo does. The flag is on the *build command*, so the
+  platform enforces it and no foreign artifact can enter. **No candidate exposes this either**: none
+  lets you template `--cache-to`/`--cache-from` per app; CapRover cannot pass build flags at all (#664);
+  and Dokku's `docker-options ... build` looks like the exception but is not — those are *container*
+  options handed to builders ("the `dockerfile` builder does not support mounted volumes"), not
+  `docker build` flags.
+- A **Maven repository proxy** (Nexus et al.) — the classic CI answer, and it sidesteps pollution
+  entirely: each build gets a clean local repo and downloads over LAN from a read-through mirror of
+  Central. But it needs the app's `settings.xml`/`build.gradle` to point at it, i.e. cooperation again;
+  you cannot force it at the network level, because Central is https and MITM would require a trusted CA
+  inside someone else's build container.
+
+The full reasoning, the rejected alternatives and the two places this repo is itself only half-compliant
+live in `D_no_shared_cache` (DECISIONS.md); this chapter only sizes up the candidates against it.
+
+So the honest reading: **`R_build_cache` is satisfied everywhere and `R_cache_isolation` nowhere.** For
+repos we don't own, the only safe cache under any of the four is the content-keyed *layer* cache (which
+is why a `COPY pom.xml` + `RUN mvn dependency:go-offline` layer earns its keep), and everything faster
+requires the project to opt in. That is the one place where retiring this repo is a genuine regression
+rather than a deletion.
+
+Three traps worth carrying into the new repo:
+
+- **Cache-busting build args.** Docker folds build args into every layer's cache key even when the
+  Dockerfile never consumes them. Coolify injected `SOURCE_COMMIT`, `COOLIFY_CONTAINER_NAME` and
+  `COOLIFY_BUILD_SECRETS_HASH` on every build, so for a stretch of the v4 betas nothing cached at all
+  (#7040). It is fixed — arg injection is toggleable and `SOURCE_COMMIT` is excluded by default — and
+  the docs now warn that re-enabling it "will cause Docker's build cache to be invalidated on every
+  commit". Worth re-checking on whatever version the guide is written against.
+- **BuildKit's own GC evicts the cache behind your back.** Independently of any product-level cleanup,
+  buildkitd runs its own garbage collection, and the defaults are reported to drop unused entries after
+  roughly 48 hours — long enough to look like it works, short enough that a weekly rebuild finds an
+  empty cache. Any product where the answer is "just use cache mounts" needs an explicit buildkitd GC
+  policy in the guide, and that policy is *not* per-app either.
+- **The purge cadence is the cache's real lifetime.** `shepherd-clearcache` runs `docker system prune -f`
+  *and* wipes `/var/cache/shepherd/docker/*` weekly, so caching here is already only effective within a
+  week; under any candidate the successor cron (`docker buildx prune`, needed anyway — Dokploy's
+  unbounded cache growth is issue #1031) has to stay weekly-ish rather than nightly, or it defeats the
+  requirement it is meant to support.
+
+## Java apps: they all run, the friction is the port
+
+`R_java_docker` is nearly a non-discriminator — a Vaadin-Boot or Spring-Boot fat jar in a `Dockerfile`
+is just a container, and all four build and run it. Two things do differ:
+
+- **Port handling.** Shepherd's contract is `EXPOSE 8080` and Traefik routes to it. Coolify, Dokploy and
+  CapRover each take the container port as a per-app setting, so 8080 is a field to fill in. **Dokku is
+  the odd one out**: it maps exposed ports *through*, so a Dockerfile with `EXPOSE 8080` gets published
+  at `app.domain:8080`, and each app needs `dokku ports:set app http:80:8080 https:443:8080` to appear
+  on 443. One command per app, but a foot-gun the guide has to spell out.
+- **Runtime memory limits and the JVM.** The runtime memory quota is what the JVM sizes its heap
+  against, so the products that expose per-app memory limits cleanly (Coolify, Dokploy, Dokku's
+  `resource:limit --memory`) are the ones where a `-XX:MaxRAMPercentage` Dockerfile stays predictable;
+  CapRover only reaches limits through raw *Service Update Override* JSON.
 
 ## Admin interfaces, per contender
 
@@ -154,17 +312,44 @@ It is also a **hidden argument against the Swarm products**: under Swarm, contai
 `app.1.<taskid>` rather than stable names, so these tools still work but show you churning task IDs
 instead of apps. The generic-TUI escape hatch is materially nicer on plain Docker.
 
-## Dokku: wildcard certs
+## Dokku: routing and wildcard certs
 
-`R_https_wildcard` wants **one** wildcard cert so a new app is served over https immediately, with no
-per-app ACME round-trip. Dokku has two routes there and neither is turnkey:
+**What Dokku routes with: nginx by default — but Traefik is an official option.** The proxy shipped and
+enabled by default is **nginx** (the `*-vhosts` plugin family), and the core distribution also documents
+**Traefik**, **Caddy**, **HAProxy** and **OpenResty** as first-party proxy implementations. Switching is
+a property, per app or globally:
 
-- **[`dokku-letsencrypt`](https://github.com/dokku/dokku-letsencrypt)** (official plugin — 1118★, MIT,
+```bash
+dokku proxy:set --global type traefik
+```
+
+That matters more than a footnote, because Dokku's Traefik plugin drives Traefik *the same way this repo
+does* — by attaching docker labels to app containers (only the `web` process gets labels), with
+`dokku traefik:labels:add APP <directive> <value>` as the escape hatch and `dokku traefik:show-config`
+to inspect the generated compose config. The entire mental model of the current setup transfers.
+
+So `R_https_wildcard` has **three** routes on Dokku, and the choice of proxy decides which are open:
+
+- **Traefik proxy plugin + global DNS-01** — the closest thing to the current setup, and all in-product:
+
+  ```bash
+  dokku traefik:set --global letsencrypt-email automated@dokku.sh
+  dokku traefik:set --global challenge-mode dns          # default is tls (TLS-ALPN-01)
+  dokku traefik:set --global dns-provider cloudflare
+  dokku traefik:set --global dns-provider-cf_api_key ...  # passed through as CF_API_KEY
+  ```
+
+  Credentials are global and masked in `traefik:report` (raw values via `--format json`). Two caveats:
+  the plugin **ignores certs from the `certs` plugin** ("only supports automatic ssl certificates from
+  its letsencrypt integration"), which rules out both nginx routes below; and nothing in the plugin declares a
+  wildcard SAN, so per-app ACME *orders* remain unless you add the `tls.domains` labels yourself with
+  `traefik:labels:add`. DNS-01 at least removes the port-80-reachability half of the problem. 🟡
+- **nginx + [`dokku-letsencrypt`](https://github.com/dokku/dokku-letsencrypt)** (official plugin — 1118★, MIT,
   active 2026-09-01) gained wildcard support via the DNS-01 challenge in **v0.20.0**, using a lego DNS
   provider (Cloudflare, Route53, Namecheap…). Credentials can be set `--global`, but **issuance is
   per-app** — so every new app still performs its own ACME round-trip. That satisfies "https works"
   but not the "no per-app round-trip" half of the requirement. 🟡
-- **[`dokku-global-cert`](https://github.com/dokku-community/dokku-global-cert)** (community plugin —
+- **nginx + [`dokku-global-cert`](https://github.com/dokku-community/dokku-global-cert)** (community plugin —
   20★, MIT, active 2026-07-20) is the exact model Shepherd uses: **one** cert, imported for every new
   app and applied to every existing app that has no cert of its own, with re-application on update.
   Combined with your own lego/certbot DNS-01 renewal cron, this fully satisfies `R_https_wildcard`. ✅
@@ -172,53 +357,81 @@ per-app ACME round-trip. Dokku has two routes there and neither is turnkey:
   There is also a rawer official variant — drop `server.crt`/`server.key` into `/home/dokku/tls` and
   uncomment the `ssl_certificate` lines in `/etc/nginx/conf.d/dokku.conf`.
 
-The `dokku-global-cert` + renewal-cron combination is glue — but it is *exactly the kind of glue the new
-repo exists to document*, and it is a smaller, more inspectable piece of glue than a `traefik.yml`
-patch to a product that owns its own Traefik.
+Two credible picks, then, depending on which kind of glue you prefer to own: **nginx +
+`dokku-global-cert` + your own renewal cron** (one cert, no per-app ACME at all — the exact current
+model, at the price of owning renewal), or **the Traefik plugin with `challenge-mode dns`** (renewal is
+Traefik's problem, as it is today, at the price of per-app ACME orders unless you add wildcard
+`tls.domains` labels). Either is *exactly the kind of glue the new repo exists to document*, and both are
+smaller and more inspectable than a `traefik.yml` patch to a product that owns its own Traefik.
 
 ## Verdict
 
-The two relaxations — Swarm accepted, and CLI/TUI accepted for administration — reshuffled this
-substantially. **Accepting Swarm promoted nobody** (Dokploy and CapRover flip to ✅ on
-`R_no_kubernetes`, but CapRover still fails wildcard certs *and* resource limits, so it remains the
-weakest match). **Accepting a CLI, however, promoted Dokku from disqualified to arguably the best
-fit.** It is now a three-horse race.
+The three relaxations — Swarm accepted, CLI/TUI accepted for administration, and no backup restore
+required — plus the two added requirements reshuffled this substantially. **Accepting Swarm promoted
+nobody** (Dokploy and CapRover flip to ✅ on `R_no_kubernetes`, but CapRover still fails wildcard certs
+*and* resource limits, so it remains the weakest match). **Accepting a CLI promoted Dokku from
+disqualified to arguably the best fit.** **Dropping the restore requirement then took away Dokku's
+single biggest structural advantage** — no control-plane database to lose no longer wins anything — and
+**the added requirements don't put it back** — `R_java_docker` and `R_build_cache` are satisfied by all
+four, and `R_cache_isolation` by none of them. It stays a three-horse race, now on narrower grounds:
+Dokku still wins on *subtracting* moving parts, not on recoverability.
+
+**One requirement now beats the entire field: `R_cache_isolation`.** Per-project *layer* caches are
+enforced today by a flag on the build command — the dependency cache mount is a gap here too, see
+`D_no_shared_cache` — and every candidate replaces even that with one shared,
+unkeyed, root-writable cache mount whose isolation depends on each app's own Dockerfile. Nothing in the
+comparison changes that, so it is a standing cost of retiring — to be paid either by accepting
+layer-cache-only builds for foreign repos, or by running a Maven proxy and requiring cooperation from
+the projects that use it (see *Build caches*).
 
 **Dokku** — the strongest match on the requirements that are hard to glue, and the only contender that
 *subtracts* from the current architecture instead of substituting for it:
 
 - `dokku git:sync --build-if-changes APP URL` is a literal SCM poll — it replaces `R_periodic_rebuild`
   **and deletes Jenkins**, the heaviest single component in the current stack, for one crontab line.
-- Plain Docker, no Swarm, no control-plane database: state is files under `/home/dokku` plus git
-  remotes, so `R_restore_the_box` stays a file backup — the one property of the current setup most
-  worth keeping, and the only contender that keeps it.
+- Plain Docker, no Swarm, no control-plane database — now an argument about *moving parts* rather than
+  recoverability: stable container names (so `lazydocker`/`ctop` show apps, not Swarm task IDs), no
+  Postgres to upgrade, nothing to keep healthy but Dokku itself.
 - Bash + Go plugins is the smallest conceptual delta from Bash + compose.
-- Its two gaps are the two chapters of the new repo: a wildcard-cert renewal cron (above) and a stats
-  view (`lazydocker`, zero code).
+- **It can keep Traefik.** The official Traefik proxy plugin is label-driven, exactly like this repo, and
+  supports global DNS-01 — so the current Traefik knowledge is an asset rather than a sunk cost, and the
+  wildcard gap narrows to "add `tls.domains` labels" (or stay on nginx + `dokku-global-cert`).
+- Its remaining gaps are small chapters of the new repo: the wildcard-cert decision (above), a stats view
+  (`lazydocker`, zero code), and `ports:set` per app because of `EXPOSE 8080`.
 - Its one real cost is a **web UI**: third-party or nothing. The missing HTTP API is *not* a cost —
   command-and-parse is already how shepherd-java and `virtui` drive Docker, Kubernetes and Traefik, and
   Dokku's reports emit `--format json` anyway.
 
 **Dokploy** — the best fit if a web UI is non-negotiable. Same Traefik as here (so wildcard DNS-01 is a
 config edit, not a redesign), native cron *Schedules* so `R_periodic_rebuild` is in-product, built-in
-per-app metrics, a total-coverage official CLI, and "system restore" as a named migration feature.
-Asterisks: Docker Swarm, a proprietary subdirectory in an otherwise Apache-2.0 repo, and **v0.30.6 —
-still pre-1.0**, which matters more than usual when the deliverable is documentation written against it.
+per-app metrics, a total-coverage official CLI, and the container port is just a field, so `EXPOSE 8080`
+needs no fixing up. Asterisks: Docker Swarm (which also makes container-level TUIs show task IDs instead
+of apps), a proprietary subdirectory in an otherwise Apache-2.0 repo, unbounded build-cache growth
+(#1031), and **v0.30.6 — still pre-1.0**, which matters more than usual when the deliverable is
+documentation written against it. Its "system restore" feature, previously a selling point, is now moot.
 
 **Coolify** — checks every box on plain Docker, with the largest community and a real REST API + Go
 CLI. Costs: the heaviest stack of the group by a wide margin (4 mandatory containers, ~1 GB idle before
-a single app is deployed — see the footprint chapter), periodic rebuild is an external cron, and its
-restore path has the `APP_KEY` footgun.
+a single app is deployed — see the footprint chapter), periodic rebuild is an external cron, and a
+demonstrated willingness to break the build cache by injecting per-build args (#7040, since fixed) —
+which matters directly to `R_build_cache`. The `APP_KEY` restore footgun no longer counts against it.
 
 **CapRover** — weakest match; wildcard/DNS-01 and resource limits both need hand-written overrides.
 
 ### How to settle it
 
 The new repo is a *guide*, and a guide cannot be written for a product nobody has installed. Both
-finalist installs are an afternoon on a throwaway VPS, and one exercise discriminates between them
-better than any further desk research: **bring the box back from bare metal plus a backup, timed.**
-That tests `R_restore_the_box` for real, reveals how much of the guide is click-path versus
-checked-in file, and shakes out the Swarm-specific unknowns as a side effect —
+finalist installs are an afternoon on a throwaway VPS, and with the restore drill no longer a
+requirement, one exercise discriminates between them better than any further desk research: **install
+from scratch, deploy one real Vaadin-Boot app, then deploy it again after a trivial commit — timed.**
+
+The second build is the whole test. It measures `R_build_cache` where it actually bites (does Maven
+re-download the world?) — and deploying a *second, different* app that shares coordinates with the first
+measures `R_cache_isolation` just as cheaply: build A, then check whether B's build resolves A's
+`1.0-SNAPSHOT` jar. On the way there it also forces `R_java_docker` (the `EXPOSE 8080` question),
+`R_https_wildcard` (is the app on https the moment its hostname exists?), `R_periodic_rebuild` (wire the
+poll or the cron for real) and `R_admin_interface` — while revealing how much of the guide is click-path
+versus checked-in file. It also shakes out the Swarm-specific unknowns as a side effect —
 
 - the Swarm **overlay** address pool, which is settable only at `docker swarm init --default-addr-pool`
   time and which Dokploy's installer runs for you without those flags (this repo already hit the >28
@@ -232,15 +445,24 @@ checked-in file, and shakes out the Swarm-specific unknowns as a side effect —
 Since the goal is to retire `shepherd*` entirely, the naming contract and `config.json` are
 *deletions*, not losses. What actually needs re-implementing, documenting or consciously dropping:
 
-- **Per-project buildx local caches** with a weekly purge (`shepherd-clearcache`). Every product caches
-  via Docker's own layer cache instead; the per-project isolation that fixed shepherd issue #3 has no
-  direct equivalent, so parallel-build behaviour needs re-checking.
+- **The dependency-cache story** (`R_build_cache`, `R_cache_isolation`) — the biggest chapter, and the
+  only genuine regression. The per-project buildx local caches go away (no product exposes per-app
+  `--cache-to`), replaced by BuildKit **cache mounts written into each app's Dockerfile**, which are
+  shared box-wide. So the chapter has to take a position: serial builds plus `sharing=locked` for
+  *corruption*, and for *pollution* either layer-cache-only builds for repos we don't own, or a Maven
+  repo proxy plus a per-project `id=` convention for the ones we do. Plus a buildkitd GC policy so the
+  cache outlives the rebuild interval, and the successor to `shepherd-clearcache`: a weekly — not
+  nightly — `docker buildx prune`.
 - **A wildcard-cert renewal cron**, for any product that doesn't own the whole ACME flow — the largest
-  chapter for Dokku, a `traefik.yml` patch for Dokploy/Coolify.
+  chapter for Dokku *if* it stays on nginx + `dokku-global-cert`; a handful of `traefik:set` lines if it
+  uses Dokku's Traefik plugin, and a `traefik.yml` patch for Dokploy/Coolify.
 - **The periodic-rebuild trigger** — one crontab line for Dokku (`git:sync --build-if-changes`), an
   in-product *Schedule* for Dokploy, an external cron hitting a webhook for Coolify/CapRover.
-- **A tested restore drill** (`R_restore_the_box`) — trivial today, a real chapter for anything with a
-  Postgres control plane.
+- **A reinstall runbook** (`R_restore_the_box`, relaxed) — from-scratch install plus re-adding the demo
+  projects. No backup/restore drill, and consequently no reason to fear a Postgres control plane.
+- **The port contract** (`R_java_docker`) — a per-app setting on Coolify/Dokploy/CapRover; on Dokku a
+  `ports:set app http:80:8080 https:443:8080` per app, because `EXPOSE 8080` would otherwise publish the
+  app on `:8080`.
 - **A stats view**, if the chosen product doesn't ship one: `lazydocker` or `ctop`, zero code.
 
 Two things a migration would *gain*: the planned per-project Postgres service (README TODO) exists as a
@@ -353,6 +575,10 @@ Three things worth knowing before running this on a Shepherd box:
   [Restore](https://docs.dokploy.com/docs/core/databases/restore).
 - Dokku: [Resource management](https://dokku.com/docs/advanced-usage/resource-management/),
   [Git deployment / git:sync](https://dokku.com/docs/deployment/methods/git/),
+  [Proxy management (nginx default; Caddy/HAProxy/OpenResty/Traefik official)](https://dokku.com/docs/networking/proxy-management/),
+  [Traefik proxy plugin — letsencrypt, `challenge-mode dns`, labels](https://dokku.com/docs/networking/proxies/traefik/),
+  [Dockerfile builder — BuildKit, `DOCKER_BUILDKIT=1`, cache mounts](https://dokku.com/docs/deployment/builders/dockerfiles/),
+  [Port management — `EXPOSE` is published through](https://dokku.com/docs/networking/port-management/),
   [dokku-letsencrypt DNS-01](https://github.com/dokku/dokku-letsencrypt),
   [dokku-global-cert](https://github.com/dokku-community/dokku-global-cert/blob/master/README.md),
   [SSL configuration / `/home/dokku/tls`](http://dokku.viewdocs.io/dokku/configuration/ssl/),
@@ -369,6 +595,26 @@ Three things worth knowing before running this on a Shepherd box:
   [ledokku](https://github.com/ledokku/ledokku) (and [Dokku's 2021 endorsement of
   it](https://x.com/dokku/status/1373740087968686080)),
   [lazydocker](https://github.com/jesseduffield/lazydocker), [ctop](https://github.com/bcicen/ctop).
+- Build caches: [Docker buildx mount cache — cache mounts vs per-project `type=local`, and the
+  parallel-build / `sharing=locked` problem](https://mvysny.github.io/docker-build-cache/),
+  [BuildKit cache mount reference — `id` defaults to `target`, `sharing=shared|private|locked`, and
+  "another build may overwrite the files"](https://docs.docker.com/reference/dockerfile/#run---mounttypecache),
+  [Dokku `docker-options` — build-phase options are *container* options for builders, not `docker build`
+  flags](https://dokku.com/docs/advanced-usage/docker-options/),
+  ["Prevent your Coolify deploys from randomly starting without a build cache" — buildkitd's own GC
+  evicting unused entries](https://www.loopwerk.io/articles/2026/docker-buildkit-cache-coolify/),
+  [Coolify: Dockerfile build pack — build-arg injection, `SOURCE_COMMIT` excluded to preserve the
+  cache](https://coolify.io/docs/applications/build-packs/dockerfile),
+  [Coolify #7040 — build cache not utilised](https://github.com/coollabsio/coolify/issues/7040),
+  ["How Coolify accidentally broke Docker layer caching"](https://www.loopwerk.io/articles/2025/coolify-docker-layer-caching/),
+  [Dokploy #1031 — excessive unused build cache](https://github.com/Dokploy/dokploy/issues/1031),
+  [Dokploy build types](https://docs.dokploy.com/docs/core/applications/build-type),
+  [CapRover #664 — no way to pass extra flags to `docker build`](https://github.com/caprover/caprover/issues/664),
+  CapRover BuildKit: `defaultDockerBuildVersion: '2'` in
+  [`src/utils/CaptainConstants.ts`](https://github.com/caprover/caprover/blob/master/src/utils/CaptainConstants.ts),
+  consumed by `buildImageFromDockerFile` in
+  [`src/docker/DockerApi.ts`](https://github.com/caprover/caprover/blob/master/src/docker/DockerApi.ts)
+  (read on 2026-09-09).
 - Docker Swarm status: [Swarm mode docs (no deprecation notice)](https://docs.docker.com/engine/swarm/),
   [docker/roadmap #175 "clarify its status"](https://github.com/docker/roadmap/issues/175),
   [Mirantis support-through-2030 commitment, summarised](https://blog.oxyconit.com/docker-swarm-mode-2026-practical-guide/).

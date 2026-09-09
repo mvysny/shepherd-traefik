@@ -38,6 +38,39 @@ The higher-level [shepherd-java-client](https://github.com/mvysny/shepherd-java-
 Web Admin) drives this project; this repo is the low-level layer it calls into. The predecessor
 [Vaadin Shepherd](https://github.com/mvysny/shepherd) used Kubernetes; this rewrite drops k8s for plain Docker + Traefik.
 
+## Documentation targets
+
+This repo's prose lives in six places, each with a distinct audience and *what it is allowed to own*.
+Match the target before writing a line — the failure mode is a fact explained twice, which then drifts.
+
+| Target | Audience | Scope & length | Owns |
+|---|---|---|---|
+| **README.md** | the operator at the front door | thin: positioning, requirements, install, troubleshooting, how to onboard a project | *how to run this box* — and routing the reader onward |
+| **CLAUDE.md** (this file) | a contributor / coding agent | invariant-focused; pointers, not reference | what you must not break *from a distance*: the naming contract, the network-sharing gotcha, the per-project-cache rule — plus the **script index** below |
+| **Script comment headers** (`install`, `shepherd-build`, …) | someone reading or invoking that one script | dense, per-script, standalone | the precise technical truth of that script: arguments, env knobs, prerequisites, and a `WHY THIS IS NEEDED` block where the *what* isn't self-evident (`shepherd-traefik-connect-networks` is the model) |
+| **`install`'s printed follow-up steps** | the operator, mid-install | a numbered list, emitted at the end of a run | the manual steps `install` deliberately does *not* automate (docker GID in compose, Jenkins first-run, DNS) |
+| **DECISIONS.md** | someone asking "why is it like this?" | one coherent, mutable entry per live decision (`D_` slugs) | the *why-we-chose*, including the roads not taken |
+| **COMPARISON.md** | someone deciding whether to retire this repo | requirements as `R_` boxes + a survey of replacement products | *what else exists*, and which product this could be retired into |
+
+Rules that make six targets survivable:
+
+- **Single source of truth per fact.** Each fact has one home and the others link to it. When tempted
+  to explain something twice, link instead — the failure mode to watch for is compressing a `D_` entry
+  into a bullet here, which reads like a summary and is really a third copy.
+- **But don't over-link into unreadability.** A one-line load-bearing restatement is fine when it saves
+  a jump ("per-project caches are mandatory; see `D_no_shared_cache` for why"). Repeat the *fact*, defer
+  the *explanation*.
+- **A script's comment header must stand alone.** It is read by whoever is about to run the thing, who
+  will not go looking for a rationale first. It may defer *motivation* ("see `D_no_shared_cache`"), never
+  *usage*.
+- **COMPARISON.md answers "should we replace this", DECISIONS.md answers "why is it like this".** Don't
+  argue a Shepherd design decision in COMPARISON.md — link to the `D_`; and don't migrate the `R_` boxes
+  or the product survey into DECISIONS.md.
+- **Enumerated items get slugs, not numbers** — `R_build_cache`, `D_no_shared_cache`, underscores
+  throughout, backticked in prose. Stable once published; rename only with a sweep of every reference.
+- There is deliberately **no CHANGELOG** (the deploy is a `git pull`, so git *is* the changelog) and no
+  glossary — the naming contract in *Conventions when editing* is the whole vocabulary.
+
 ## Architecture
 
 Three long-lived admin containers, defined in `docker-compose.yaml`, all on a private `admin.int` Docker network:
@@ -79,8 +112,11 @@ attachment — routers then appear in the dashboard but requests 502. `shepherd-
 ## Conventions when editing
 
 - All scripts are Bash with `set -e -o pipefail` (or `set -euo pipefail`). Keep that.
-- Per-project caches must stay separate — a shared buildx cache breaks parallel builds (see shepherd issue #3).
-  Related: `install` pins `concurrentJenkinsBuilders: 1` because 2 builders caused Gradle lock timeouts.
+- Per-project caches must stay separate, and the separation must be enforced by flags on the *build
+  command* — not by convention inside a project's `Dockerfile`. A shared cache breaks parallel builds
+  (shepherd issue #3, why `install` pins `concurrentJenkinsBuilders: 1`) **and** lets one project
+  pollute another's Maven/Gradle artifacts. See `D_no_shared_cache` in DECISIONS.md for the full
+  reasoning, the rejected alternatives, and the two places this is currently only half-implemented.
 - Naming is load-bearing and mirrored in shepherd-java: container `shepherd_PROJECTID` / `int_*` for admin,
   image `shepherd/PROJECTID`, network `PROJECTID.shepherd`, admin network `admin.int`.
 - `mydomain.me` is the placeholder DNS domain throughout `docker-compose.yaml` and `install`; the operator
