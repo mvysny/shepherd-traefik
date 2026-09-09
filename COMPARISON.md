@@ -89,7 +89,7 @@ Legend: ✅ built in · 🟡 possible but needs manual config or an external cro
 | `R_build_cache` | ✅ per-project buildx `type=local` cache dir | 🟡 cache mounts work; cache is shared box-wide, and injected build args broke caching outright for a stretch of the v4 betas (#7040 — fixed, `SOURCE_COMMIT` now excluded by default) | 🟡 cache mounts work; shared, per-app `--no-cache` toggle, unbounded cache growth is a filed issue (#1031) | 🟡 cache mounts work and are **documented** (free on Docker 24+, else `DOCKER_BUILDKIT=1` in `/etc/default/dokku`); shared, not per-project | 🟡 cache mounts work (builds go through dockerode with `version: '2'`), but no way to pass extra build flags at all (#664) |
 | `R_cache_isolation` | 🟡 per-project `--cache-to` for the *layer* cache, enforced by the build command — but the `/root/.gradle` cache mount `install` recommends is shared box-wide (`D_no_shared_cache`, *Known gap*) | 🟡 by convention only — a per-project `id=` in each Dockerfile; nothing enforces it | 🟡 convention only | 🟡 convention only | ❌ convention only, and no build flags at all (#664) |
 | `R_java_docker` | ✅ `Dockerfile`, port 8080 by contract | ✅ Dockerfile build pack; port per app (*Ports Exposes*) | ✅ Dockerfile build type; container port per app | 🟡 runs fine, but `EXPOSE 8080` makes Dokku publish the app on **:8080**, so each app needs `dokku ports:set app http:80:8080 https:443:8080` | ✅ Dockerfile via `captain-definition`; container HTTP port per app |
-| `R_periodic_rebuild` | ✅ Jenkins poll-SCM schedule | 🟡 push webhooks only; cron an HTTP call to `/deploy?uuid=…` with an API token | 🟡 push webhooks; cron `POST /api/application.deploy`, or a Dokploy **Schedule** (cron task) that calls it | 🟡 `dokku git:sync --build-if-changes APP URL` is exactly a poll — but you cron it yourself | 🟡 push webhooks only; cron a call to the webhook URL |
+| `R_periodic_rebuild` | ✅ Jenkins poll-SCM schedule | 🟡 push webhooks only; cron an HTTP call to `/deploy?uuid=…` with an API token | 🟡 push webhooks; cron `POST /api/application.deploy`, or a Dokploy **Schedule** (cron task) that calls it — the deploy is *unconditional*, there is no build-if-changed anywhere in the tree | 🟡 `dokku git:sync --build-if-changes APP URL` is exactly a poll — but you cron it yourself, and pick the flag deliberately: plain `git:sync` builds nothing, `--build` always, `--build-if-changes` only on a change | 🟡 push webhooks only; cron a call to the webhook URL |
 | `R_run_docker` | ✅ (via shepherd-java) | ✅ mem/CPU limits in *Advanced* | ✅ mem/CPU limits per app (Docker Swarm services) | ✅ `resource:limit --cpu --memory` | 🟡 Swarm; limits only through raw *Service Update Override* JSON |
 | `R_https_wildcard` | ✅ Traefik, DNS challenge, wildcard | 🟡 Traefik or Caddy; documented recipe to switch the resolver to DNS challenge + wildcard | 🟡 Traefik; default is HTTP-01, community recipes edit `traefik.yml` for a DNS-challenge resolver | 🟡 **three** routes, none fully turnkey — incl. the official Traefik proxy plugin with global `challenge-mode dns`; see *Dokku: routing and wildcard certs* below | 🟡 default HTTP-01 per app; DNS-01 only via *Certbot override*; long-open issues (#1444, #1761) |
 | `R_observe_stats` | ❌ here; shepherd-java Web Admin shows them | ✅ *Sentinel*: per-container CPU/mem history graphs (not for Compose apps) | ✅ built-in per-service CPU/mem/net/disk | 🟡 no monitoring by design (“will never manage monitoring”), but apps are plain containers, so `docker stats` / `docker logs` work directly — CLI-acceptable since the relaxation | 🟡 bundled NetData (server-level; per-container via cgroups charts) |
@@ -363,7 +363,9 @@ the projects that use it (see *Build caches*).
   Dokku's reports emit `--format json` anyway.
 
 **Dokploy** — the best fit if a web UI is non-negotiable. Same Traefik as here (so wildcard DNS-01 is a
-config edit, not a redesign), native cron *Schedules* so `R_periodic_rebuild` is in-product, built-in
+config edit, not a redesign), native cron *Schedules* so `R_periodic_rebuild` is in-product — in its
+unconditional form only, so the interval is a whole-farm rebuild cost (see *What the new repo would have
+to carry*) — built-in
 per-app metrics, a total-coverage official CLI, and the container port is just a field, so `EXPOSE 8080`
 needs no fixing up. Asterisks: Docker Swarm (which also makes container-level TUIs show task IDs instead
 of apps), a proprietary subdirectory in an otherwise Apache-2.0 repo, unbounded build-cache growth
@@ -418,8 +420,18 @@ Since the goal is to retire `shepherd*` entirely, the naming contract and `confi
 - **A wildcard-cert renewal cron**, for any product that doesn't own the whole ACME flow — the largest
   chapter for Dokku *if* it stays on nginx + `dokku-global-cert`; a handful of `traefik:set` lines if it
   uses Dokku's Traefik plugin, and a `traefik.yml` patch for Dokploy/Coolify.
-- **The periodic-rebuild trigger** — one crontab line for Dokku (`git:sync --build-if-changes`), an
-  in-product *Schedule* for Dokploy, an external cron hitting a webhook for Coolify/CapRover.
+- **The periodic-rebuild trigger** — one crontab line for Dokku, an in-product *Schedule* for Dokploy,
+  an external cron hitting a webhook for Coolify/CapRover. With one decision inside it that only shows
+  up once you read the flags: **conditional or unconditional?** `D_poll_scm` welcomes rebuilds when the
+  app itself hasn't changed (new base image, moved dependency versions get picked up for free), so
+  *unconditional is the wanted behaviour* — but it means every interval rebuilds every project on the
+  farm, which is precisely the load `R_build_cache` has to absorb. Dokploy gives only the unconditional
+  form (a *Schedule* fires `application.deploy` regardless of whether the repo moved; nothing in the
+  tree checks). Dokku gives both and defaults to neither: plain `git:sync` builds nothing at all,
+  `--build` rebuilds every run, `--build-if-changes` only on a change — the cheapest option, and the
+  one that quietly drops the drift-pickup consequence `D_poll_scm` calls a feature. So the chapter
+  either states the interval as a whole-farm rebuild cost (Dokploy, where unbounded build-cache growth
+  is #1031) or states which Dokku flag it chose and what that gives up.
 - **A reinstall runbook** (`R_restore_the_box`, relaxed) — from-scratch install plus re-adding the demo
   projects. No backup/restore drill, and consequently no reason to fear a Postgres control plane.
 - **The port contract** (`R_java_docker`) — a per-app setting on Coolify/Dokploy/CapRover; on Dokku a
@@ -636,6 +648,10 @@ Three things worth knowing before running this on a Shepherd box:
   memory reports: [#3755 idle usage doubled in v0.27.1](https://github.com/Dokploy/dokploy/issues/3755),
   [#3909 memory efficiency for low-memory VPS tiers](https://github.com/Dokploy/dokploy/issues/3909),
   [discussion #4728 "why Dokploy uses so much memory"](https://github.com/Dokploy/dokploy/discussions/4728).
+  The "no build-if-changed" claim is a negative result: `Dokploy/dokploy@canary` searched on 2026-09-09
+  for build-if-changes / last-commit comparison logic in the deployment path, nothing found. Dokku's
+  flag semantics — plain `git:sync` "does not trigger an application build", `--build`, and
+  `--build-if-changes` — from [Git deployment](https://dokku.com/docs/deployment/methods/git/).
 - Dokploy backup/restore: [Backups](https://docs.dokploy.com/docs/core/backups),
   [Restore](https://docs.dokploy.com/docs/core/databases/restore).
 - Dokku: [Resource management](https://dokku.com/docs/advanced-usage/resource-management/),
