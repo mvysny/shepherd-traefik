@@ -22,7 +22,7 @@ certificates* (Traefik, the same pattern Caddy/Traefik "docker auto-proxy" setup
 - **Runs the app in Docker.** Delegated: `shepherd-build` execs `shepherd-cli restart` inside `int_shepherd`, and
   shepherd-java does the actual `docker run` as `shepherd_PROJECTID` on network `PROJECTID.shepherd` (with runtime
   memory/CPU quotas from `/etc/shepherd/java/config.json`). This repo only provides the host setup and naming
-  contract. Note: `RUNTIME_MEMORY` is documented in `shepherd-build` but not used there.
+  contract.
 - **Serves each app at `https://PROJECTID.<domain>`.** Traefik terminates TLS with a wildcard Let's Encrypt cert
   (DNS challenge), routes by host to the app container via Docker labels, and also fronts `admin.<domain>` and
   `jenkins-admin.<domain>`.
@@ -36,7 +36,8 @@ certificates* (Traefik, the same pattern Caddy/Traefik "docker auto-proxy" setup
 
 The higher-level [shepherd-java-client](https://github.com/mvysny/shepherd-java-client) (`shepherd-cli`,
 Web Admin) drives this project; this repo is the low-level layer it calls into. The predecessor
-[Vaadin Shepherd](https://github.com/mvysny/shepherd) used Kubernetes; this rewrite drops k8s for plain Docker + Traefik.
+[Vaadin Shepherd](https://github.com/mvysny/shepherd) used Kubernetes; this rewrite drops k8s for plain Docker + Traefik
+(`D_kubernetes` → `D_docker_traefik`), which is also why there is no build system or test suite here.
 
 ## Documentation targets
 
@@ -49,7 +50,7 @@ Match the target before writing a line — the failure mode is a fact explained 
 | **CLAUDE.md** (this file) | a contributor / coding agent | invariant-focused; pointers, not reference | what you must not break *from a distance*: the naming contract, the network-sharing gotcha, the per-project-cache rule — plus the **script index** below |
 | **Script comment headers** (`install`, `shepherd-build`, …) | someone reading or invoking that one script | dense, per-script, standalone | the precise technical truth of that script: arguments, env knobs, prerequisites, and a `WHY THIS IS NEEDED` block where the *what* isn't self-evident (`shepherd-traefik-connect-networks` is the model) |
 | **`install`'s printed follow-up steps** | the operator, mid-install | a numbered list, emitted at the end of a run | the manual steps `install` deliberately does *not* automate (docker GID in compose, Jenkins first-run, DNS) |
-| **DECISIONS.md** | someone asking "why is it like this?" | one coherent, mutable entry per live decision (`D_` slugs) | the *why-we-chose*, including the roads not taken |
+| **DECISIONS.md** | someone asking "why is it like this?" | one coherent, mutable entry per live decision *already made* (`D_` slugs) | the *why-we-chose*, including the roads not taken |
 | **COMPARISON.md** | someone deciding whether to retire this repo | requirements as `R_` boxes + a survey of replacement products | *what else exists*, and which product this could be retired into |
 
 Rules that make six targets survivable:
@@ -66,6 +67,11 @@ Rules that make six targets survivable:
 - **COMPARISON.md answers "should we replace this", DECISIONS.md answers "why is it like this".** Don't
   argue a Shepherd design decision in COMPARISON.md — link to the `D_`; and don't migrate the `R_` boxes
   or the product survey into DECISIONS.md.
+- **DECISIONS.md records only decisions already taken.** Shipped, or accepted-and-not-yet-implemented (that
+  is what its `Status:` line is for). A speculative feature, an idea, an open question or a TODO is *not* a
+  decision and gets no `D_` — the roads-not-taken inside an existing entry are the only "what we didn't do"
+  content the file carries. Known-missing features stay a TODO in `README.md` (Postgres service) or an `R_`
+  gap in `COMPARISON.md`.
 - **Enumerated items get slugs, not numbers** — `R_build_cache`, `D_no_shared_cache`, underscores
   throughout, backticked in prose. Stable once published; rename only with a sweep of every reference.
 - There is deliberately **no CHANGELOG** (the deploy is a `git pull`, so git *is* the changelog) and no
@@ -90,24 +96,29 @@ buildable with `docker build -t x .` and runnable with `docker run -p8080:8080 x
 **The network-sharing gotcha:** Traefik can only *route* to a container if it *shares that container's network*.
 A `docker compose up`/recreate reattaches Traefik only to `admin.int`, silently dropping every `*.shepherd`
 attachment — routers then appear in the dashboard but requests 502. `shepherd-traefik-connect-networks` fixes this
-(see below). Prefer `docker restart int_traefik` over a compose recreate to preserve attachments.
+(see below). Prefer `docker restart int_traefik` over a compose recreate to preserve attachments. This fragility is
+the accepted price of per-app network isolation — don't "fix" it by consolidating networks; see
+`D_network_per_project`, which also owns why `/etc/docker/daemon.json` carries enlarged address pools.
 
-## Scripts
+## Script index
 
-- **`install`** — one-time host setup (Ubuntu 24.04+, run as root): apt upgrade, install docker, create `admin.int`
-  network, write `/etc/docker/daemon.json` (enlarged address pools so >28 project networks are possible +
-  `containerd-snapshotter` for buildx local caches), create `/var/cache/shepherd/docker` and
-  `/var/opt/shepherd/jenkins_home`, install the weekly cache-purge cron, and scaffold `/etc/shepherd/java/config.json`.
-  Prints manual follow-up steps (fix docker GID in compose, Jenkins first-run setup, etc.).
-- **`shepherd-build PROJECTID`** — called by Jenkins after a repo update. `docker build`s the image with a
-  **per-project** buildx local cache (`/var/cache/shepherd/docker/$PROJECT_ID`) under memory/CPU limits, then execs
-  `shepherd-cli restart -p PROJECTID` inside `int_shepherd`. Env knobs: `BUILD_MEMORY`, `CPU_QUOTA`, `BUILD_ARGS`,
-  `DOCKERFILE`, `RUNTIME_MEMORY`. Validates PROJECTID against the DNS-label regex.
-- **`shepherd-traefik-connect-networks`** — idempotently connects `int_traefik` to every `*.shepherd` network and
-  restarts it if anything changed. Run after any Traefik recreate. Env: `TRAEFIK_CONTAINER`, `NETWORK_SUFFIX`, `RESTART_TRAEFIK`.
-- **`shepherd-clearcache`** — installed as a weekly cron; `docker system prune -f` + wipes `/var/cache/shepherd/docker/*`.
-- **`uninstall`** — stops/removes **all** Docker containers (not just Shepherd's), prunes everything, removes daemon
-  config and `/var/opt/shepherd`, but **keeps `/etc/shepherd`** config.
+A map, not a reference: each entry is a pointer plus what the thing is for. **Every script's own comment
+header is the authority** on its arguments, env knobs and prerequisites — read that before invoking or
+editing one, and put new technical truth *there*, not here.
+
+| Script | What it is | Read before editing |
+|---|---|---|
+| `install` | one-time host setup, root, Ubuntu 24.04+; also prints the manual follow-up steps | `D_network_per_project` (address pools), `D_no_shared_cache` |
+| `shepherd-build PROJECTID` | Jenkins-only: builds `shepherd/PROJECTID`, then execs `shepherd-cli restart` in `int_shepherd` | `D_no_shared_cache` (the cache flags are load-bearing), `D_poll_scm` |
+| `shepherd-traefik-connect-networks` | repairs Traefik's `*.shepherd` attachments; idempotent. The model for what a header should be | `D_network_per_project` |
+| `shepherd-clearcache` | weekly cron: prunes images and wipes the per-project caches | `D_no_shared_cache` (keep the cadence weekly) |
+| `uninstall` | tears the box down; kills **all** containers, keeps `/etc/shepherd` | — |
+| `docker-compose.yaml` | the three `int_*` admin containers and their Traefik labels | `D_docker_traefik` |
+
+Two invariants that are easy to break from here: the `install`/`uninstall` pair must stay symmetric about
+what it creates and removes (`/etc/shepherd` is the deliberate exception), and `install` is a *script whose
+output is documentation* — a quoting slip in its trailing `echo` block silently costs the operator the
+follow-up steps, so `bash -n install` after touching it.
 
 ## Conventions when editing
 
@@ -118,7 +129,8 @@ attachment — routers then appear in the dashboard but requests 502. `shepherd-
   pollute another's Maven/Gradle artifacts. See `D_no_shared_cache` in DECISIONS.md for the full
   reasoning, the rejected alternatives, and the two places this is currently only half-implemented.
 - Naming is load-bearing and mirrored in shepherd-java: container `shepherd_PROJECTID` / `int_*` for admin,
-  image `shepherd/PROJECTID`, network `PROJECTID.shepherd`, admin network `admin.int`.
+  image `shepherd/PROJECTID`, network `PROJECTID.shepherd`, admin network `admin.int`. It is load-bearing
+  because there is no scheduler or registry — the name *is* how a container is found again (`D_docker_traefik`).
 - `mydomain.me` is the placeholder DNS domain throughout `docker-compose.yaml` and `install`; the operator
   replaces it (or adds `/etc/hosts` entries for a toy/debug setup).
 - Traefik is pinned to `v3.6` (needs 3.6+ so its docker client can talk to newer docker daemons).

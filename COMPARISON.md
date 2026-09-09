@@ -30,16 +30,16 @@ relaxed since (each marked inline, so the trail stays readable):
   scheduled rebuild.
 - `R_cache_isolation` — **added 2026-09-09:** and the cache must be **per project**. A cache shared
   between projects is a no-go: one project can pollute another's Maven artifacts, accidentally or
-  deliberately. This is not a preference but the reason this repo has
-  `/var/cache/shepherd/docker/$PROJECT_ID` at all (shepherd issue #3), and it is the requirement that
+  deliberately. Not a preference — it is why this repo has `/var/cache/shepherd/docker/$PROJECT_ID` at
+  all; `D_no_shared_cache` in `DECISIONS.md` has the reasoning. It is also the requirement that
   survives every candidate unbeaten — see *Build caches* below.
 - `R_java_docker` — **added 2026-09-09:** run JVM apps — Vaadin-Boot or Spring-Boot, `java -jar` in
   the app's own `Dockerfile`, listening on 8080 — as ordinary containers. No language detection or
   buildpack magic is wanted; the `Dockerfile` is the contract. The interesting part is not "can it run
   a JVM" (they all can) but what each product does with `EXPOSE 8080`.
-- `R_periodic_rebuild` — rebuild **on a schedule**, not only on git push. Shepherd hosts repos it
-  doesn't necessarily own (example projects, addons), so it can't rely on installing a webhook in
-  every upstream repo; polling also picks up base-image and dependency updates.
+- `R_periodic_rebuild` — rebuild **on a schedule**, not only on git push, because Shepherd hosts
+  repos it doesn't own. Why polling rather than webhooks or push-to-deploy, and what it buys:
+  `D_poll_scm` in `DECISIONS.md`. A candidate that can only deploy on push fails this box.
 - `R_run_docker` — run the app as a Docker container with runtime memory/CPU quotas, restarted
   on crash and on host reboot.
 - `R_https_wildcard` — serve at `https://PROJECTID.<domain>` using **one wildcard Let's Encrypt
@@ -51,8 +51,9 @@ relaxed since (each marked inline, so the trail stays readable):
   2026-09-09:** web UI, TUI or CLI all qualify, and a third-party add-on counts as a web UI. A product
   whose *only* interface is a CLI is a downgrade to note, not a disqualification — control by issuing
   commands and reading their output is already how shepherd-java and `virtui` work.
-- `R_single_host` — everything on one Linux box. No multi-node cluster to operate.
-- `R_no_kubernetes` — no Kubernetes; that is why the original Shepherd was rewritten. **Docker Swarm
+- `R_single_host` — everything on one Linux box. No multi-node cluster to operate (`D_docker_traefik`).
+- `R_no_kubernetes` — no Kubernetes; that is why the original Shepherd was rewritten (`D_kubernetes` →
+  `D_docker_traefik` in `DECISIONS.md` records what that cost and what replaced it). **Docker Swarm
   is explicitly accepted** (decided 2026-09-09): on a single node it is `docker swarm init` once and
   then the PaaS's problem, it is upstream in the engine already installed, and Mirantis has committed
   to supporting it through at least 2030. Swarm is feature-stable, not dying.
@@ -129,73 +130,32 @@ survives even when it does not. This repo already relies on both — `install` d
 `RUN --mount` recipe for `/root/.gradle` — so the mechanism is not new here, only its *scoping* is
 (below, and `D_no_shared_cache`).
 
-**The hard half: that cache is then shared by every project on the box.** These are *two* different
-problems and they need different answers — conflating them is how you end up thinking `sharing=locked`
-solved it.
+**The hard half: that cache is then shared by every project on the box.** Two distinct problems live in
+that sentence — *corruption* by concurrent writers, which serial builds or `sharing=locked` fix, and
+*pollution*, one project's artifacts reaching another's build, which they do not. `D_no_shared_cache`
+in `DECISIONS.md` argues both out in full: why `id` defaulting to `target` puts every project in the
+same directory, why an unkeyed cache mount is categorically different from the content-keyed layer
+cache, and why `mvn install` of a shared `1.0-SNAPSHOT` is the path that bites before anything hostile
+does. Read it there; this chapter only sizes the candidates up against the conclusion, which is that
+**no product in the field enforces isolation, and only the mechanism differs.**
 
-**Problem 1: corruption (concurrent writers).** With parallel builds against one cache mount, Maven has
-no locking and fails with random errors, potentially corrupting the cache; Gradle writes lock files and
-then times out waiting on them. This is shepherd issue #3, and it *is* what `sharing=locked` /
-`sharing=private` (or simply serial builds, as `install` already pins with
-`concurrentJenkinsBuilders: 1`) fixes.
+**What actually isolates, and which candidates expose it:**
 
-**Problem 2: pollution (`R_cache_isolation`) — the one with no cheap answer.** Docker documents the
-shared-mutable-state semantics as expected behaviour, not as a bug:
+| Mechanism | Enforces isolation? | Available in a candidate? |
+|---|---|---|
+| `id=<project>` on the cache mount | ❌ cooperation — the *app's* Dockerfile picks the id, or omits it | ✅ everywhere, being nothing but a Dockerfile line |
+| one **buildx builder per project** | ✅ the mount lives in the builder's own state | ❌ **none** — there is no per-app `BUILDX_BUILDER` knob anywhere |
+| one **cache directory per project** (what this repo does) | ✅ the flag is on the *build command*, so no foreign artifact can enter | ❌ **none** lets you template `--cache-to`/`--cache-from` per app |
+| a **Maven repo proxy** (Nexus et al.) | ❌ cooperation — needs each app's `settings.xml`/`build.gradle` to point at it, and can't be forced at the network level (Central is https) | 🟡 orthogonal: a container you'd run alongside any of them |
 
-> Cache mounts should only be used for better performance. Your build should work with any contents of
-> the cache directory **as another build may overwrite the files** or GC may clean it if more storage
-> space is needed.
+Two candidate-specific notes on the third row, since it is the one that looks closest to being
+available: **CapRover cannot pass extra flags to `docker build` at all** (#664), and **Dokku's
+`docker-options … build` is not the exception it appears to be** — those are *container* options handed
+to the builder ("the `dockerfile` builder does not support mounted volumes"), not `docker build` flags.
 
-Three facts make that sharper than it sounds:
-
-- **`id` defaults to the value of `target`.** Every project writing `--mount=type=cache,target=/root/.m2`
-  lands in the *same* directory. Nothing scopes it per app, per image or per repo by default.
-- **Cache-mount contents are not part of any cache key** — the crisp difference from the layer cache.
-  Layer cache entries are *content-keyed* (parent digest + instruction + digest of copied files), so for
-  project B to hit A's entry, B's inputs must be identical, in which case the output legitimately is
-  too. A cache mount is the opposite: unkeyed, mutable, and writable as root by every build on the box.
-- **Maven never re-verifies what is already in the local repository.** Checksums are checked at
-  *download* time; an artifact already present is used as-is. Hence
-  `dependency:purge-local-repository` exists as the manual escape hatch.
-
-The path that bites first is not malice, it is **`mvn install`**: multi-module builds install their own
-artifacts into the shared local repo, and a demo farm is full of forks of the same starter — so two
-projects legitimately share `com.example:my-app:1.0-SNAPSHOT`, and the second one silently resolves the
-first one's jar with a green build. Any shared `-SNAPSHOT` dependency behaves the same way.
-
-Gradle is better in one way and worse in another: `caches/modules-2/files-2.1/…/<sha1>/…` is
-content-addressed, so swapping a jar in place is harder — but a mount of all of `/root/.gradle` also
-shares `init.d/` (an init script dropped there runs in *every* later Gradle build), `wrapper/dists/`
-(verified only when `distributionSha256Sum` is set, which starters usually omit) and the build cache.
-Mount `caches/modules-2` and `wrapper` specifically, never the whole directory.
-
-*Proportionately:* a hostile repo already runs arbitrary code as root in its own build and ships an
-image that runs on the box, so it owns *itself* either way. What a shared cache adds is **lateral
-movement** into every other project's artifacts — and Shepherd deliberately hosts repos it doesn't own
-(`R_periodic_rebuild`). That escalation is why CI for untrusted repos does not share a local repository.
-
-**What actually isolates, and what only looks like it does:**
-
-- `id=<project>` on the mount — **cooperation, not enforcement.** A careless or hostile Dockerfile uses
-  another id, or none. Fine as a collision-avoidance convention for the projects that are ours; worth
-  nothing as a boundary.
-- One **buildx builder per project** — the only platform-enforced isolation for cache mounts, since the
-  mount lives in the builder's own state. Cost: a separate layer cache per builder, so disk use
-  balloons. **No candidate exposes it** (there is no per-app `BUILDX_BUILDER` knob).
-- One **cache directory per project** — what this repo does. The flag is on the *build command*, so the
-  platform enforces it and no foreign artifact can enter. **No candidate exposes this either**: none
-  lets you template `--cache-to`/`--cache-from` per app; CapRover cannot pass build flags at all (#664);
-  and Dokku's `docker-options ... build` looks like the exception but is not — those are *container*
-  options handed to builders ("the `dockerfile` builder does not support mounted volumes"), not
-  `docker build` flags.
-- A **Maven repository proxy** (Nexus et al.) — the classic CI answer, and it sidesteps pollution
-  entirely: each build gets a clean local repo and downloads over LAN from a read-through mirror of
-  Central. But it needs the app's `settings.xml`/`build.gradle` to point at it, i.e. cooperation again;
-  you cannot force it at the network level, because Central is https and MITM would require a trusted CA
-  inside someone else's build container.
-
-The full reasoning, the rejected alternatives and the two places this repo is itself only half-compliant
-live in `D_no_shared_cache` (DECISIONS.md); this chapter only sizes up the candidates against it.
+One `Dockerfile`-authoring note that carries over to any of them: mount `caches/modules-2` and `wrapper`
+specifically rather than all of `/root/.gradle`, which also shares `init.d/` — an init script dropped
+there runs in *every* later Gradle build on the box.
 
 So the honest reading: **`R_build_cache` is satisfied everywhere and `R_cache_isolation` nowhere.** For
 repos we don't own, the only safe cache under any of the four is the content-keyed *layer* cache (which

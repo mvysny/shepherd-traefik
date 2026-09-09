@@ -25,6 +25,8 @@ In more details:
   * To isolate Jenkins from other apps for security reasons, Jenkins runs on its own private Docker network, `admin.int`
   * Needs to be accessible from outside, so that plugins can be upgraded; also we can't restart Jenkins when there are ongoing builds...
   * Jenkins simply runs `/opt/shepherd-traefik/shepherd-build PROJECTID` to rebuild the project and to start the docker container.
+  * Jenkins **polls** each repo on a schedule rather than waiting for a push, so that Shepherd can host repos
+    you don't own; see `D_poll_scm` in [DECISIONS.md](DECISIONS.md).
 * Shepherd Web Admin runs in Docker as well, hosted at `admin.foo.com`
   * Also runs on private Docker network `admin.int`
 * A https certificate for the wildcard DNS is obtained automatically by Traefik: [2 Vaadin apps 1 Traefik](https://mvysny.github.io/2-vaadin-apps-1-traefik/)
@@ -33,9 +35,19 @@ In more details:
   * The docker container is named `shepherd_PROJECTID`; the docker image is named `shepherd/PROJECTID`; the docker network is named `PROJECTID.shepherd`
   * TODO Postgres Service
 
-> Note: Original Shepherd used Kubernetes, however Kubernetes uses a lot of CPU for its upkeep,
-> and makes the system much more complicated than it needs to be. See the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd)
-> if you're interested.
+> Note: the [previous Vaadin Shepherd](https://github.com/mvysny/shepherd) ran the same thing on Kubernetes;
+> this rewrite uses plain Docker + Traefik instead. Why, and what replaced each piece of Kubernetes:
+> `D_kubernetes` and `D_docker_traefik` in [DECISIONS.md](DECISIONS.md).
+
+## Where things are documented
+
+| If you want to… | Read |
+|---|---|
+| run, install or troubleshoot this box | this file |
+| know what one script does, its arguments and env knobs | the comment header at the top of that script |
+| know *why* it's built this way, and what was rejected | [DECISIONS.md](DECISIONS.md) (`D_` entries) |
+| know whether an off-the-shelf PaaS could replace it | [COMPARISON.md](COMPARISON.md) (`R_` requirements + product survey) |
+| change the code without breaking something remote | [CLAUDE.md](CLAUDE.md) |
 
 ## Minimum requirements:
 
@@ -73,50 +85,39 @@ Configure Traefik to use https via Let's Encrypt in DNS wildcard mode:
 
 ## App routes 502 after restarting Traefik (missing networks)
 
-Traefik can only *route* to an app container if it *shares that container's network*. Each app
-runs on its own private `PROJECTID.shepherd` network, and Traefik gets attached to those networks
-as apps are deployed.
+**Symptom:** an app's router shows up in the Traefik dashboard, but requests to it return **502**.
 
-**These attachments are not persistent.** A `docker compose up` / recreate of Traefik brings it
-back attached only to the networks declared in `docker-compose.yaml` (`admin.int`), silently
-dropping every per-app `*.shepherd` attachment. The symptom: routers still show up in the Traefik
-dashboard, but requests return **502**.
+**Cause:** Traefik can only route to a container whose network it *shares*, and a
+`docker compose up` / recreate brings Traefik back attached only to `admin.int` — silently dropping
+every per-app `*.shepherd` attachment.
 
-If the networks have gone missing like this, run the repair script to reconnect Traefik to every
-`*.shepherd` network (idempotent — safe to run repeatedly; it restarts Traefik if anything changed):
+**Fix:** reconnect it. Idempotent, safe to run repeatedly, restarts Traefik if anything changed:
 
 ```bash
 $ /opt/shepherd-traefik/shepherd-traefik-connect-networks
 ```
 
-To avoid the problem in the first place, prefer `docker restart int_traefik` over a compose
-recreate, since a plain restart preserves the existing network attachments.
+**Avoid it:** prefer `docker restart int_traefik` over a compose recreate — a plain restart preserves
+the existing attachments.
 
-## Scripts
+The full account of the failure mode is the `WHY THIS IS NEEDED` block at the top of that script;
+why apps get a network each at all is `D_network_per_project` in [DECISIONS.md](DECISIONS.md).
 
-All scripts live in `/opt/shepherd-traefik` and are plain Bash.
+## Scripts you run
 
-- **`install`** — one-time host setup, run as root on Ubuntu 24.04+. Upgrades the system, installs
-  Docker, creates the `admin.int` network, writes `/etc/docker/daemon.json` (enlarged address pools
-  so many project networks are possible, plus the containerd snapshotter for buildx caches), creates
-  the cache and Jenkins-home directories, installs the weekly cache-purge cron, and scaffolds
-  `/etc/shepherd/java/config.json`. Prints manual follow-up steps at the end.
-- **`shepherd-traefik-connect-networks`** — the repair script described above; reconnects Traefik to
-  every `*.shepherd` network. Safe to run repeatedly.
-- **`shepherd-clearcache`** — deletes dangling Docker images (`docker system prune -f`) and wipes the
-  per-project build caches under `/var/cache/shepherd/docker`. Installed by `install` as a weekly cron
-  (`/etc/cron.weekly/`) so build caches don't fill the disk; can also be run manually.
-- **`uninstall`** — removes Shepherd-Traefik from the box. **Warning:** it stops and removes *all*
-  Docker containers (not just Shepherd's), prunes everything, removes the Docker daemon config and
-  `/var/opt/shepherd`, but keeps `/etc/shepherd` configuration. Run as root.
+All scripts live in `/opt/shepherd-traefik` and are plain Bash. **Each one's comment header is its
+reference documentation** — arguments, env knobs, prerequisites and warnings live there, not here.
+Run them as root.
 
-### Internal scripts
+| Script | When you run it |
+|---|---|
+| `./install` | once, to provision a fresh box (see [Installation](#installation)) |
+| `./shepherd-traefik-connect-networks` | after any Traefik recreate, or on a 502 (above) |
+| `./shepherd-clearcache` | never by hand normally — `install` wires it as a weekly cron; run it manually if the disk fills |
+| `./uninstall` | to tear the box down. **Kills *all* Docker containers, not just Shepherd's** |
 
-- **`shepherd-build PROJECTID`** — **internal; meant to be called by Jenkins only, not run by the
-  maintainer by hand.** After a project's git repo is updated, Jenkins runs this to `docker build` the
-  image (with a per-project buildx cache, under memory/CPU limits) and then restart the app container
-  via `shepherd-cli` inside `int_shepherd`. Tunable via the `BUILD_MEMORY`, `CPU_QUOTA`, `BUILD_ARGS`,
-  `DOCKERFILE`, and `RUNTIME_MEMORY` environment variables.
+`shepherd-build PROJECTID` is **internal**: Jenkins calls it, the maintainer does not. See its
+comment header if you're debugging a build.
 
 # Adding Your Project To Shepherd
 
