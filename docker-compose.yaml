@@ -2,10 +2,15 @@
 #
 # Read https://github.com/mvysny/shepherd-traefik for more details.
 #
-# Prerequisites:
+# Prerequisites (all three are done for you by `./install`; listed here so this
+# file stands alone if you ever bring the stack up on a hand-prepared box):
 # 1. Installed docker
 # 2. Created folder `/var/opt/shepherd`
 # 3. Created private network: `docker network create admin.int`
+#
+# Bring the stack up with `docker compose up -d`. But to restart Traefik alone,
+# prefer `docker restart int_traefik` — a compose recreate drops Traefik's per-app
+# network attachments and every app then 502s. See shepherd-traefik-connect-networks.
 
 version: '3'
 

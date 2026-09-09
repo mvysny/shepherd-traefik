@@ -15,6 +15,9 @@
 # Symptom of that state: routers show up in the dashboard, but requests 502.
 # Run this after any Traefik recreate to restore the attachments.
 #
+# Why apps get a network each in the first place (and why this fragility is worth
+# it) is `D_network_per_project` in DECISIONS.md.
+#
 # USAGE
 # -----
 #   ./shepherd-traefik-connect-networks              # connect + restart if changed
