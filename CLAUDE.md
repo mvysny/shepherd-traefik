@@ -41,7 +41,8 @@ Web Admin) drives this project; this repo is the low-level layer it calls into. 
 
 ## Documentation targets
 
-This repo's prose lives in six places, each with a distinct audience and *what it is allowed to own*.
+This repo's *durable* prose lives in six places, each with a distinct audience and *what it is allowed
+to own* — plus `ideas/`, which is deliberately not durable (see *Ideas & their graduation* below).
 Match the target before writing a line — the failure mode is a fact explained twice, which then drifts.
 
 | Target | Audience | Scope & length | Owns |
@@ -76,6 +77,32 @@ Rules that make six targets survivable:
   throughout, backticked in prose. Stable once published; rename only with a sweep of every reference.
 - There is deliberately **no CHANGELOG** (the deploy is a `git pull`, so git *is* the changelog) and no
   glossary — the naming contract in *Conventions when editing* is the whole vocabulary.
+
+## Ideas & their graduation
+
+`ideas/` holds designs not yet acted on, one per file, kebab-named after what the idea *is*
+(`ideas/generated-dockerfile.md`). `ls ideas/` is the index — never add one. An idea file is a
+scratchpad: brainstorm freely, and none of the doc rules above apply to it, because it is going to be
+deleted. That also means **nothing durable may live only there**, and nothing durable should *point*
+there — an idea file links out to `R_`/`D_` slugs, never the other way round, so graduation is never a
+dangling-reference sweep. (Deep research an idea accumulates goes in a same-stem sidecar folder,
+`ideas/generated-dockerfile/`, split only when the one file becomes unreadable.)
+
+**An idea graduates the moment it is acted on, and graduation is not done until the file is gone.**
+Before deleting, backport what lasts to the durable place for that kind of fact — the six targets above,
+which for ideas in this repo means in practice:
+
+| Nugget | Goes to |
+|---|---|
+| the decision itself, once taken, with the roads not taken | a `D_` entry in `DECISIONS.md` (and its `Status:` line) |
+| a requirement it moves, or a scored product comparison | the `R_` boxes / feature matrix in `COMPARISON.md` |
+| how to invoke or configure the thing that got built | the comment header of the script that implements it |
+| a manual step `install` won't automate | `install`'s trailing `echo` block |
+| operator-facing how-to, or a known-missing feature | `README.md` (prose, or its TODO list) |
+| an invariant a future editor could break from a distance | the sections above in this file |
+
+A rejected idea leaves at most a one-line why-not, in the place a future reader would look, and only if
+the trap is invisible in the scripts themselves. Otherwise it just gets deleted.
 
 ## Architecture
 
