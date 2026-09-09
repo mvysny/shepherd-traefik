@@ -9,6 +9,31 @@ containers behind a Traefik reverse proxy on a single Linux box. There is **no b
 test suite** — the repo is a set of Bash scripts plus a `docker-compose.yaml`, deployed to `/opt/shepherd-traefik`
 on the target machine. Changes are shell edits; "running" it means executing the scripts on a host with Docker.
 
+**Project category: a self-hosted mini-PaaS (Platform-as-a-Service).** The same family as Dokku, CapRover, Coolify,
+Dokploy and Piku: a "Heroku-like" single-host platform that turns git repos into running containers behind an
+auto-TLS reverse proxy. Two well-known sub-categories it combines: a *poll-SCM CI/CD pipeline* (Jenkins rebuilds
+on a schedule — not git-push-to-deploy like Dokku) and *Docker-label-driven ingress with automatic Let's Encrypt
+certificates* (Traefik, the same pattern Caddy/Traefik "docker auto-proxy" setups use).
+
+**Main responsibilities** (what this repo does itself vs. delegates):
+
+- **Builds the app in Docker.** `shepherd-build` runs `docker build` on the project's `Dockerfile` into image
+  `shepherd/PROJECTID`, with a per-project buildx cache and memory/CPU limits on the *build*. Jenkins schedules it.
+- **Runs the app in Docker.** Delegated: `shepherd-build` execs `shepherd-cli restart` inside `int_shepherd`, and
+  shepherd-java does the actual `docker run` as `shepherd_PROJECTID` on network `PROJECTID.shepherd` (with runtime
+  memory/CPU quotas from `/etc/shepherd/java/config.json`). This repo only provides the host setup and naming
+  contract. Note: `RUNTIME_MEMORY` is documented in `shepherd-build` but not used there.
+- **Serves each app at `https://PROJECTID.<domain>`.** Traefik terminates TLS with a wildcard Let's Encrypt cert
+  (DNS challenge), routes by host to the app container via Docker labels, and also fronts `admin.<domain>` and
+  `jenkins-admin.<domain>`.
+- **Keeps apps up.** Docker's restart policy restarts containers on crash and after host reboot; Traefik, Jenkins
+  and the Web Admin are `restart: always` in `docker-compose.yaml`.
+- **Runtime resource control, not observation.** Build and runtime CPU/memory *limits* are enforced (see above), but
+  no script in this repo *observes* runtime stats (CPU/mem usage, logs). Observation happens in the shepherd-java
+  Web Admin / `shepherd-cli`, which read them straight from Docker, or by plain `docker stats` / `docker logs`.
+- **Host housekeeping.** `install` provisions the box, `shepherd-clearcache` prunes images and build caches weekly,
+  `shepherd-traefik-connect-networks` repairs Traefik's per-app network attachments, `uninstall` tears it down.
+
 The higher-level [shepherd-java-client](https://github.com/mvysny/shepherd-java-client) (`shepherd-cli`,
 Web Admin) drives this project; this repo is the low-level layer it calls into. The predecessor
 [Vaadin Shepherd](https://github.com/mvysny/shepherd) used Kubernetes; this rewrite drops k8s for plain Docker + Traefik.
