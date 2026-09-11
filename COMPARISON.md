@@ -41,7 +41,10 @@ relaxed since (each marked inline, so the trail stays readable):
   `R_cache_isolation` since 2026-09-09:** whoever writes the Dockerfile also names the build caches, so
   an in-repo Dockerfile hands an untrusted repo the choice of which cache it shares. Holding both
   requirements means the platform must generate the Dockerfile — which is what "no buildpack magic"
-  rules out. See *What each product accepts as build input*; unresolved, no `D_` yet.
+  rules out. See *What each product accepts as build input*. Still unresolved, and no `D_` yet — but one
+  road out is closed: **templating our own Dockerfile renderer was rejected 2026-09-11**
+  (`D_no_shared_cache`, *Alternatives rejected*), so trading this requirement away means adopting an
+  off-the-shelf buildpack builder, not writing one.
 - `R_periodic_rebuild` — rebuild **on a schedule**, not only on git push, because Shepherd hosts
   repos it doesn't own. Why polling rather than webhooks or push-to-deploy, and what it buys:
   `D_poll_scm` in `DECISIONS.md`. A candidate that can only deploy on push fails this box.
@@ -234,7 +237,8 @@ choice to the platform. Read from source and docs on 2026-09-09:
 docker volume **`cache-$APP`** per app, mounts it at `/cache` and sets `CACHE_PATH=/cache`; the app never
 learns the cache's name, and `dokku repo:purge-cache APP` clears exactly that one. `builder-pack` (CNB)
 does the same through `--cache`/`--cache-image`. That is the design — platform-owned recipe, platform-named
-per-project cache — already implemented, which is worth pricing against writing one.
+per-project cache — already implemented, which is worth pricing against writing one. It was priced on
+2026-09-11 and **writing one lost** (`D_no_shared_cache`, *Alternatives rejected*).
 
 **It collides with `R_java_docker` as worded** ("no language detection or buildpack magic is wanted; the
 `Dockerfile` is the contract"). The two requirements now pull in opposite directions: whoever writes the

@@ -4,20 +4,21 @@
 a `D_` entry in `DECISIONS.md` (it would close `D_no_shared_cache`'s *Known gap*, so that entry's
 `Status:` line moves too); if rejected, as a one-line why-not wherever someone would retry it.
 
-**Raised:** 2026-09-09, alongside `generated-dockerfile.md`.
+**Raised:** 2026-09-09, alongside the since-rejected `generated-dockerfile.md`; its live counterpart is
+now `herokuish-builds.md`.
 
 ## The problem it answers
 
-Same hole as `generated-dockerfile.md`: BuildKit's cache-mount `id` defaults to the mount `target`, so
+Same hole as `herokuish-builds.md`: BuildKit's cache-mount `id` defaults to the mount `target`, so
 `RUN --mount=type=cache,target=/root/.m2` puts **every project on the box in one directory**, and an app
 that sets `id=` explicitly can address any other project's cache deliberately. `D_no_shared_cache` calls
 this the *Known gap*: the layer cache is per project because the flags are on the build command, the
 dependency cache is not because the mount is in the app's Dockerfile.
 
-Where this idea differs: it **keeps the app's Dockerfile**. `generated-dockerfile.md` fixes the hole by
-taking the Dockerfile away from the project, which costs `R_java_docker` and needs a spec, a base-image
-policy and a renderer. This one changes nothing the project ships and asks nothing of repos we don't own
-(most of them — `D_poll_scm`).
+Where this idea differs: it **keeps the app's Dockerfile**. `herokuish-builds.md` fixes the hole by
+taking the Dockerfile away from the project, which costs `R_java_docker` and re-onboards every hosted app
+onto a new contract (`Procfile`, `.buildpacks`, `system.properties` instead of a `Dockerfile`) — an
+acceptable ask, but a migration. This one changes nothing the project ships and needs no migration at all.
 
 ## The mechanism it copies, exactly as Dokku implements it
 
@@ -81,7 +82,8 @@ RUN --mount=type=cache,id=PROJECTID-/root/.m2,sharing=locked,target=/root/.m2 \
 
 The declared list of cache directories comes from the box side (a per-language default —
 `/root/.m2`, `/root/.gradle/caches`, `/root/.gradle/wrapper` — that a project may extend but never
-redirect), which is the one piece this shares with `generated-dockerfile.md`.
+redirect). Under `herokuish-builds.md` that list is not ours at all: the Heroku buildpacks already point
+`maven.repo.local` and `GRADLE_USER_HOME` inside the cache volume.
 
 Two details that matter:
 
@@ -150,9 +152,11 @@ wins. If it is the accident `D_no_shared_cache` actually documents — `mvn inst
   which is also where the "BuildKit evicts your cache after ~48h" trap in `COMPARISON.md` lives.
 - Does `shepherd-clearcache` gain a per-project mode (the `dokku repo:purge-cache APP` equivalent), and
   does anything in the Web Admin need to call it?
-- Is this a *replacement* for `generated-dockerfile.md` or a complement? They overlap on the cache-dir
-  list and disagree on who owns the Dockerfile; the honest reading is that this one is cheap and keeps
-  `R_java_docker`, that one is thorough and gives it up.
+- Is this a *replacement* for `herokuish-builds.md` or a complement? They disagree on who owns the
+  Dockerfile; the honest reading is that this one is cheap, keeps `R_java_docker` and needs nothing from
+  the hosted repos, while that one gives the Dockerfile up and gets the enforcement for free from a
+  builder someone else maintains. Complementary at the edges either way: whichever is built, the other
+  covers the projects it cannot.
 
 ## Related
 
@@ -160,5 +164,6 @@ wins. If it is the accident `D_no_shared_cache` actually documents — `mvn inst
   `target` is the whole problem.
 - `R_cache_isolation` and the mechanism table in *Build caches* (`COMPARISON.md`) — where the
   per-project-builder row and Dokku's per-app-volume row are already scored.
-- `generated-dockerfile.md` — the other half: platform-authored Dockerfiles, and the survey of how
-  every other product declares a build.
+- `herokuish-builds.md` — the other half: give the build recipe up entirely to a buildpack builder that
+  already names the cache per project. Its predecessor `generated-dockerfile.md` (Shepherd renders the
+  Dockerfile itself) was rejected on 2026-09-11; the why-not is in `D_no_shared_cache`.

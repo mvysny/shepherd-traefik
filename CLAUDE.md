@@ -81,12 +81,12 @@ Rules that make six targets survivable:
 ## Ideas & their graduation
 
 `ideas/` holds designs not yet acted on, one per file, kebab-named after what the idea *is*
-(`ideas/generated-dockerfile.md`). `ls ideas/` is the index — never add one. An idea file is a
+(`ideas/herokuish-builds.md`). `ls ideas/` is the index — never add one. An idea file is a
 scratchpad: brainstorm freely, and none of the doc rules above apply to it, because it is going to be
 deleted. That also means **nothing durable may live only there**, and nothing durable should *point*
 there — an idea file links out to `R_`/`D_` slugs, never the other way round, so graduation is never a
 dangling-reference sweep. (Deep research an idea accumulates goes in a same-stem sidecar folder,
-`ideas/generated-dockerfile/`, split only when the one file becomes unreadable.)
+`ideas/herokuish-builds/`, split only when the one file becomes unreadable.)
 
 **An idea graduates the moment it is acted on, and graduation is not done until the file is gone.**
 Before deleting, backport what lasts to the durable place for that kind of fact — the six targets above,

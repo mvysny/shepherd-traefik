@@ -246,6 +246,13 @@ one has a cheap fix:
 - *A per-project `id=` inside each Dockerfile.* Cooperation, not enforcement — a careless or hostile
   Dockerfile uses another id, or none. Kept as a **collision-avoidance convention for the projects that
   are ours** (that is the remediation in *Known gap*), never as a boundary.
+- *Shepherd generating the Dockerfile itself*, from a per-project build spec (base image, build command,
+  artifact glob, cache directories), so that the `id=` is ours by construction. Right about the cause —
+  whoever writes the Dockerfile names the caches — and **rejected 2026-09-11** on what it drags in: once
+  the `FROM` is ours, so are base-image policy and an escape hatch for native dependencies, which is a
+  buildpack written from scratch. If the in-repo Dockerfile is ever traded away — that is `R_java_docker`
+  in `COMPARISON.md`, not this entry — it goes to an off-the-shelf buildpack builder, herokuish or CNB,
+  which already mount a per-app cache the app cannot name; never to a renderer of our own.
 - *One buildx builder per project.* This *does* enforce mount isolation, since the mount lives in the
   builder's state — but each builder keeps its own layer cache, so disk use balloons. Rejected on cost,
   not on correctness; revisit if the per-project `id=` convention proves unreliable.
